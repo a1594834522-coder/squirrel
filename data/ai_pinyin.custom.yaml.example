@@ -1,0 +1,51 @@
+# ai_pinyin.custom.yaml.example
+# AI 拼音输入方案自定义配置示例
+#
+# 使用方法：
+# 1. 复制此文件为 ai_pinyin.custom.yaml  
+# 2. 修改下面的配置项（特别是 API Key）
+# 3. 在 Squirrel 菜单中选择「重新部署」
+
+patch:
+  # ==================== AI 补全配置 ====================
+
+  # 是否启用 AI 补全
+  ai_completion/enabled: true
+
+  # 触发快捷键
+  # 使用 Tab 键触发 AI 补全
+  ai_completion/trigger_key: "Tab"
+
+  # ==================== AI 模型配置 ====================
+
+  # AI API Base URL
+  # OpenAI: https://api.openai.com/v1/chat/completions
+  # 或其他兼容 OpenAI 格式的 API
+  ai_completion/base_url: "https://api.openai.com/v1/chat/completions"
+
+  # API Key（必须配置）
+  # 从您的 AI 服务商获取
+  ai_completion/api_key: "YOUR_API_KEY_HERE"
+
+  # 模型名称
+  # OpenAI: gpt-3.5-turbo, gpt-4, gpt-4o-mini 等
+  ai_completion/model_name: "gpt-4o-mini"
+
+  # ==================== 上下文配置 ====================
+
+  # 上下文窗口时长（分钟）
+  # 捕获最近 N 分钟的输入作为上下文
+  # 建议值: 3-10 分钟
+  ai_completion/context_window_minutes: 10
+
+  # 最大候选数量
+  # AI 生成的候选项数量
+  # 建议值: 1-5
+  ai_completion/max_candidates: 3
+
+  # ==================== 按键绑定配置 ====================
+
+  # 覆盖默认的按键绑定，让 Tab 键不执行移动光标功能
+  key_binder/bindings:
+    - { when: composing, accept: Tab, send: Tab }
+    - { when: composing, accept: Shift+Tab, send: Shift+Tab }

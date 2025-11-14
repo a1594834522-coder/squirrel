@@ -1,0 +1,137 @@
+# Rime schema
+# encoding: utf-8
+#
+# AI 智能补全拼音输入方案
+# 基于明月拼音，集成 AI 补全功能
+
+schema:
+  schema_id: ai_pinyin
+  name: AI 拼音
+  version: "1.0"
+  author:
+    - AI Completion Team
+  description: |
+    基于明月拼音的 AI 智能补全输入方案
+    按 Tab 键触发 AI 补全
+  dependencies:
+    - luna_pinyin
+
+switches:
+  - name: ascii_mode
+    reset: 0
+    states: [ 中文, 西文 ]
+  - name: full_shape
+    states: [ 半角, 全角 ]
+  - name: simplification
+    reset: 1  # 默认启用简化字（简体）
+    states: [ 漢字, 汉字 ]
+  - name: ascii_punct
+    states: [ 。，, ., ]
+  - name: ai_completion
+    reset: 1
+    states: [ "AI✗", "AI✓" ]
+
+engine:
+  processors:
+    - lua_processor@ai_history_processor     # 历史记录捕获处理器（必须在最前面）
+    - lua_processor@ai_completion_processor  # AI 补全处理器
+    - ascii_composer
+    - recognizer
+    - key_binder
+    - speller
+    - punctuator
+    - selector
+    - navigator
+    - express_editor
+  segmentors:
+    - ascii_segmentor
+    - matcher
+    - abc_segmentor
+    - punct_segmentor
+    - fallback_segmentor
+  translators:
+    - punct_translator
+    - script_translator
+    - lua_translator@ai_completion_translator  # AI 补全翻译器
+  filters:
+    - lua_filter@ai_history_filter  # 历史记录捕获过滤器
+    - simplifier
+    - uniquifier
+
+# Speller 配置
+speller:
+  alphabet: zyxwvutsrqponmlkjihgfedcba
+  delimiter: " '"
+  algebra:
+    - erase/^xx$/
+    - abbrev/^([a-z]).+$/$1/
+    - abbrev/^([zcs]h).+$/$1/
+    - derive/^([nl])ve$/$1ue/
+    - derive/^([jqxy])u/$1v/
+    - derive/un$/uen/
+    - derive/ui$/uei/
+    - derive/iu$/iou/
+    - derive/([aeiou])ng$/$1gn/
+    - derive/([dtngkhrzcs])o(u|ng)$/$1o/
+    - derive/ong$/on/
+    - derive/ao$/oa/
+    - derive/([iu])a(o|ng?)$/a$1$2/
+
+# Translator 配置
+translator:
+  dictionary: luna_pinyin
+  prism: ai_pinyin
+  preedit_format:
+    - xform/([nl])v/$1ü/
+    - xform/([nl])ue/$1üe/
+    - xform/([jqxy])v/$1u/
+
+# AI 补全配置
+ai_completion:
+  # 是否启用 AI 补全
+  enabled: true
+
+  # 触发快捷键 (Tab, Control+space, 等)
+  # 使用 Tab 键触发 AI 补全
+  trigger_key: "Tab"
+
+  # AI 模型配置
+  base_url: "https://api.openai.com/v1/chat/completions"
+  api_key: "YOUR_API_KEY_HERE"
+  model_name: "gpt-4o-mini"
+
+  # 上下文窗口（分钟）- 改为 10 分钟
+  context_window_minutes: 10
+
+  # 最大候选数量
+  max_candidates: 3
+
+  # 提示词模板
+  system_prompt: "你是一个智能中文输入法助手。用户会提供最近10分钟输入的中文文本作为上下文，以及当前正在输入的拼音。你需要根据上下文推测用户想要输入的完整中文句子或短语。只返回中文文本，返回3个最可能的补全选项，每个选项一行。"
+
+# 按键绑定
+key_binder:
+  import_preset: default
+  bindings:
+    # 禁用 Tab 键的默认功能（移动光标），改为触发 AI 补全
+    - { when: composing, accept: Tab, send: Tab }
+    # 禁用 Shift+Tab
+    - { when: composing, accept: Shift+Tab, send: Shift+Tab }
+
+# 识别器配置
+recognizer:
+  import_preset: default
+  patterns:
+    punct: "^/([0-9]0?|[a-z]+)$"
+    reverse_lookup: "`[a-z]*'?$"
+    url: "^(www[.]|https?:|ftp[.:]|mailto:|file:).*$|^[a-z]+[.].+$"
+
+# 标点符号
+punctuator:
+  import_preset: symbols
+
+# Lua 扩展配置
+# 指定 Lua 脚本位置
+lua:
+  ai_completion_processor: "ai_completion.processor"
+  ai_completion_translator: "ai_completion.translator"

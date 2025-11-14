@@ -9,7 +9,7 @@ import UserNotifications
 import Sparkle
 import AppKit
 
-final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUStandardUserDriverDelegate, UNUserNotificationCenterDelegate {
+final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUStandardUserDriverDelegate, UNUserNotificationCenterDelegate, NSWindowDelegate {
   static let rimeWikiURL = URL(string: "https://github.com/rime/home/wiki")!
   static let updateNotificationIdentifier = "SquirrelUpdateNotification"
   static let notificationIdentifier = "SquirrelNotification"
@@ -95,6 +95,222 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
 
   func openWiki() {
     NSWorkspace.shared.open(Self.rimeWikiURL)
+  }
+
+  private var aiConfigWindow: NSWindow?
+  private var aiConfigFields: [String: Any]?
+
+  func openAIConfig() {
+    // 如果窗口已经存在，直接显示
+    if let window = aiConfigWindow {
+      window.makeKeyAndOrderFront(nil)
+      NSApp.activate(ignoringOtherApps: true)
+      return
+    }
+
+    // 创建配置窗口
+    let window = NSWindow(
+      contentRect: NSRect(x: 0, y: 0, width: 500, height: 280),
+      styleMask: [.titled, .closable],
+      backing: .buffered,
+      defer: false
+    )
+    window.title = "AI 模型配置"
+    window.center()
+
+    // 创建内容视图
+    let contentView = NSView(frame: window.contentView!.bounds)
+    contentView.autoresizingMask = [.width, .height]
+
+    // 读取当前配置
+    let configPath = SquirrelApp.userDir.appending(component: "ai_pinyin.custom.yaml")
+    var currentBaseURL = "https://api.openai.com/v1/chat/completions"
+    var currentAPIKey = ""
+    var currentModel = "gpt-4o-mini"
+
+    if FileManager.default.fileExists(atPath: configPath.path) {
+      if let content = try? String(contentsOf: configPath) {
+        // 解析 YAML 配置
+        if let baseURLMatch = content.range(of: #"ai_completion/base_url:\s*"([^"]*)"#, options: .regularExpression) {
+          let match = content[baseURLMatch]
+          if let urlMatch = match.range(of: "\"([^\"]*)\"", options: .regularExpression) {
+            currentBaseURL = String(match[urlMatch]).replacingOccurrences(of: "\"", with: "")
+          }
+        }
+        if let apiKeyMatch = content.range(of: #"ai_completion/api_key:\s*"([^"]*)"#, options: .regularExpression) {
+          let match = content[apiKeyMatch]
+          if let keyMatch = match.range(of: "\"([^\"]*)\"", options: .regularExpression) {
+            currentAPIKey = String(match[keyMatch]).replacingOccurrences(of: "\"", with: "")
+          }
+        }
+        if let modelMatch = content.range(of: #"ai_completion/model_name:\s*"([^"]*)"#, options: .regularExpression) {
+          let match = content[modelMatch]
+          if let nameMatch = match.range(of: "\"([^\"]*)\"", options: .regularExpression) {
+            currentModel = String(match[nameMatch]).replacingOccurrences(of: "\"", with: "")
+          }
+        }
+      }
+    }
+
+    // 创建标签和输入框
+    let yStart: CGFloat = 220
+    let labelWidth: CGFloat = 120
+    let fieldWidth: CGFloat = 340
+    let rowHeight: CGFloat = 60
+
+    // Base URL
+    let baseURLLabel = NSTextField(labelWithString: "API Base URL:")
+    baseURLLabel.frame = NSRect(x: 20, y: yStart, width: labelWidth, height: 20)
+    baseURLLabel.alignment = .right
+    contentView.addSubview(baseURLLabel)
+
+    let baseURLField = NSTextField(string: currentBaseURL)
+    baseURLField.frame = NSRect(x: 150, y: yStart - 5, width: fieldWidth, height: 24)
+    baseURLField.placeholderString = "https://api.openai.com/v1/chat/completions"
+    contentView.addSubview(baseURLField)
+
+    // API Key
+    let apiKeyLabel = NSTextField(labelWithString: "API Key:")
+    apiKeyLabel.frame = NSRect(x: 20, y: yStart - rowHeight, width: labelWidth, height: 20)
+    apiKeyLabel.alignment = .right
+    contentView.addSubview(apiKeyLabel)
+
+    let apiKeyField = NSSecureTextField(string: currentAPIKey)
+    apiKeyField.frame = NSRect(x: 150, y: yStart - rowHeight - 5, width: fieldWidth, height: 24)
+    apiKeyField.placeholderString = "sk-..."
+    contentView.addSubview(apiKeyField)
+
+    // Model Name
+    let modelLabel = NSTextField(labelWithString: "模型名称:")
+    modelLabel.frame = NSRect(x: 20, y: yStart - rowHeight * 2, width: labelWidth, height: 20)
+    modelLabel.alignment = .right
+    contentView.addSubview(modelLabel)
+
+    let modelField = NSTextField(string: currentModel)
+    modelField.frame = NSRect(x: 150, y: yStart - rowHeight * 2 - 5, width: fieldWidth, height: 24)
+    modelField.placeholderString = "gpt-4o-mini"
+    contentView.addSubview(modelField)
+
+    // 状态标签
+    let statusLabel = NSTextField(labelWithString: "")
+    statusLabel.frame = NSRect(x: 20, y: 50, width: 460, height: 20)
+    statusLabel.alignment = .center
+    statusLabel.textColor = .systemGreen
+    contentView.addSubview(statusLabel)
+
+    // 保存按钮
+    let saveButton = NSButton(title: "保存", target: nil, action: nil)
+    saveButton.frame = NSRect(x: 300, y: 15, width: 80, height: 32)
+    saveButton.bezelStyle = .rounded
+    saveButton.keyEquivalent = "\r"
+    contentView.addSubview(saveButton)
+
+    // 取消按钮
+    let cancelButton = NSButton(title: "取消", target: nil, action: nil)
+    cancelButton.frame = NSRect(x: 390, y: 15, width: 80, height: 32)
+    cancelButton.bezelStyle = .rounded
+    cancelButton.keyEquivalent = "\u{1b}"
+    contentView.addSubview(cancelButton)
+
+    // 保存按钮处理
+    saveButton.target = self
+    saveButton.action = #selector(saveAIConfig(_:))
+    saveButton.tag = 0
+
+    // 存储字段引用
+    aiConfigFields = [
+      "baseURL": baseURLField,
+      "apiKey": apiKeyField,
+      "model": modelField,
+      "status": statusLabel
+    ] as [String : Any]
+
+    // 取消按钮处理
+    cancelButton.target = self
+    cancelButton.action = #selector(closeAIConfig(_:))
+
+    window.contentView = contentView
+    window.delegate = self
+    aiConfigWindow = window
+
+    window.makeKeyAndOrderFront(nil)
+    NSApp.activate(ignoringOtherApps: true)
+  }
+
+  @objc private func saveAIConfig(_ sender: NSButton) {
+    guard let fields = aiConfigFields,
+          let baseURLField = fields["baseURL"] as? NSTextField,
+          let apiKeyField = fields["apiKey"] as? NSSecureTextField,
+          let modelField = fields["model"] as? NSTextField,
+          let statusLabel = fields["status"] as? NSTextField else {
+      return
+    }
+
+    let baseURL = baseURLField.stringValue.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+    let apiKey = apiKeyField.stringValue.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+    let model = modelField.stringValue.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+
+    // 验证输入
+    if baseURL.isEmpty || apiKey.isEmpty || model.isEmpty {
+      statusLabel.stringValue = "请填写所有字段"
+      statusLabel.textColor = NSColor.systemRed
+      return
+    }
+
+    // 生成配置文件
+    let configContent = """
+    # ai_pinyin.custom.yaml
+    # AI 拼音输入方案自定义配置
+    # 通过 AI 配置界面生成
+
+    patch:
+      # AI 补全配置
+      ai_completion/enabled: true
+      ai_completion/trigger_key: "Tab"
+
+      # AI 模型配置
+      ai_completion/base_url: "\(baseURL)"
+      ai_completion/api_key: "\(apiKey)"
+      ai_completion/model_name: "\(model)"
+
+      # 上下文配置
+      ai_completion/context_window_minutes: 10
+      ai_completion/max_candidates: 3
+
+      # 按键绑定配置
+      key_binder/bindings:
+        - { when: composing, accept: Tab, send: Tab }
+        - { when: composing, accept: Shift+Tab, send: Shift+Tab }
+    """
+
+    let configPath = SquirrelApp.userDir.appending(component: "ai_pinyin.custom.yaml")
+
+    do {
+      try configContent.write(to: configPath, atomically: true, encoding: String.Encoding.utf8)
+      statusLabel.stringValue = "配置已保存，请重新部署 Squirrel"
+      statusLabel.textColor = NSColor.systemGreen
+
+      // 延迟关闭窗口
+      DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+        self?.closeAIConfig(sender)
+      }
+    } catch {
+      statusLabel.stringValue = "保存失败: \(error.localizedDescription)"
+      statusLabel.textColor = NSColor.systemRed
+    }
+  }
+
+  @objc private func closeAIConfig(_ sender: Any) {
+    aiConfigWindow?.close()
+    aiConfigWindow = nil
+    aiConfigFields = nil
+  }
+
+  func windowWillClose(_ notification: Notification) {
+    if notification.object as? NSWindow === aiConfigWindow {
+      aiConfigWindow = nil
+      aiConfigFields = nil
+    }
   }
 
   static func showMessage(msgText: String?) {
