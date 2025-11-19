@@ -104,11 +104,13 @@ release: $(DEPS_CHECK)
 	mkdir -p $(DERIVED_DATA_PATH)
 	bash package/add_data_files
 	xcodebuild -project Squirrel.xcodeproj -configuration Release -scheme Squirrel -derivedDataPath $(DERIVED_DATA_PATH) $(BUILD_SETTINGS) build
+	bash scripts/sync_rime_ice_dicts.sh "$(DERIVED_DATA_PATH)/Build/Products/Release/Squirrel.app/Contents/SharedSupport"
 
 debug: $(DEPS_CHECK)
 	mkdir -p $(DERIVED_DATA_PATH)
 	bash package/add_data_files
 	xcodebuild -project Squirrel.xcodeproj -configuration Debug -scheme Squirrel -derivedDataPath $(DERIVED_DATA_PATH)  $(BUILD_SETTINGS) build
+	bash scripts/sync_rime_ice_dicts.sh "$(DERIVED_DATA_PATH)/Build/Products/Debug/Squirrel.app/Contents/SharedSupport"
 
 .PHONY: sparkle copy-sparkle-framework
 
@@ -161,11 +163,13 @@ permission-check:
 	[ -w "$(DSTROOT)" ] && [ -w "$(SQUIRREL_APP_ROOT)" ] || sudo chown -R ${USER} "$(DSTROOT)"
 
 install-debug: debug permission-check
+	DSTROOT="$(DSTROOT)" bash scripts/preinstall
 	rm -rf "$(SQUIRREL_APP_ROOT)"
 	cp -R $(DERIVED_DATA_PATH)/Build/Products/Debug/Squirrel.app "$(DSTROOT)"
 	DSTROOT="$(DSTROOT)" RIME_NO_PREBUILD=1 bash scripts/postinstall
 
 install-release: release permission-check
+	DSTROOT="$(DSTROOT)" bash scripts/preinstall
 	rm -rf "$(SQUIRREL_APP_ROOT)"
 	cp -R $(DERIVED_DATA_PATH)/Build/Products/Release/Squirrel.app "$(DSTROOT)"
 	DSTROOT="$(DSTROOT)" bash scripts/postinstall

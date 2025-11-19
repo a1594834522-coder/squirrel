@@ -40,11 +40,55 @@ for opencc_file in emoji.json emoji.txt others.txt; do
     fi
 done
 
+# Seed AI 配置模板（如用户不存在则复制示例并提供默认配置文件）
+if [ -f "${rime_shared_data_path}/ai_pinyin.custom.yaml.example" ]; then
+    /usr/bin/sudo -u "${login_user}" /bin/cp -n "${rime_shared_data_path}/ai_pinyin.custom.yaml.example" "${user_rime_dir}/ai_pinyin.custom.yaml.example" || true
+    if [ ! -f "${user_rime_dir}/ai_pinyin.custom.yaml" ]; then
+        /usr/bin/sudo -u "${login_user}" /bin/cp "${rime_shared_data_path}/ai_pinyin.custom.yaml.example" "${user_rime_dir}/ai_pinyin.custom.yaml" || true
+    fi
+fi
+
+# 确保必要的 AI 方案资源可用（依赖仍然从共享目录加载）
+for shared_file in symbols_v.yaml ai_pinyin.schema.yaml; do
+    if [ -f "${rime_shared_data_path}/${shared_file}" ]; then
+        /usr/bin/sudo -u "${login_user}" /bin/cp -n "${rime_shared_data_path}/${shared_file}" "${user_rime_dir}/${shared_file}" || true
+    fi
+done
+
+# 拷贝 rime-ice 依赖的 cn_dicts/en_dicts（若用户目录缺失核心词库）
+if [ -d "${rime_shared_data_path}/cn_dicts" ]; then
+    if [ ! -f "${user_rime_dir}/cn_dicts/8105.dict.yaml" ]; then
+        /usr/bin/sudo -u "${login_user}" /bin/mkdir -p "${user_rime_dir}/cn_dicts"
+        /usr/bin/sudo -u "${login_user}" /usr/bin/ditto "${rime_shared_data_path}/cn_dicts" "${user_rime_dir}/cn_dicts"
+    fi
+    # 兼容旧版 rime_ice.dict.yaml（引用根目录 8105/base/ext/...）
+    for legacy_dict in 8105.dict.yaml base.dict.yaml ext.dict.yaml tencent.dict.yaml others.dict.yaml; do
+        if [ ! -f "${user_rime_dir}/${legacy_dict}" ] && [ -f "${rime_shared_data_path}/cn_dicts/${legacy_dict}" ]; then
+            /usr/bin/sudo -u "${login_user}" /bin/cp "${rime_shared_data_path}/cn_dicts/${legacy_dict}" "${user_rime_dir}/${legacy_dict}" || true
+        fi
+    done
+fi
+
+if [ -d "${rime_shared_data_path}/en_dicts" ]; then
+    if [ ! -f "${user_rime_dir}/en_dicts/en.dict.yaml" ]; then
+        /usr/bin/sudo -u "${login_user}" /bin/mkdir -p "${user_rime_dir}/en_dicts"
+        /usr/bin/sudo -u "${login_user}" /usr/bin/ditto "${rime_shared_data_path}/en_dicts" "${user_rime_dir}/en_dicts"
+    fi
+fi
+
+# 预构建 Rime 资源，确保安装后即可使用
 if [ -z "${RIME_NO_PREBUILD}" ]; then
-    pushd "${rime_shared_data_path}" > /dev/null
-    "${squirrel_executable}" --build
-    popd > /dev/null
-fi && (
+    /usr/bin/sudo -u "${login_user}" /bin/mkdir -p "${user_rime_dir}/build"
+    /usr/bin/sudo -u "${login_user}" /usr/bin/env \
+        RIME_SHARED_DATA_DIR="${rime_shared_data_path}" \
+        RIME_USER_DATA_DIR="${user_rime_dir}" \
+        "${squirrel_app_root}/Contents/MacOS/rime_deployer" --build \
+            "${user_rime_dir}" \
+            "${rime_shared_data_path}" \
+            "${user_rime_dir}/build"
+fi
+
+(
     /usr/bin/sudo -u "${login_user}" "${squirrel_executable}" --enable-input-source
     /usr/bin/sudo -u "${login_user}" "${squirrel_executable}" --select-input-source
 )

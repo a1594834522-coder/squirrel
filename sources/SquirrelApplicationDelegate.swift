@@ -101,6 +101,7 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
   private var aiConfigFields: [String: Any]?
 
   func openAIConfig() {
+    ensureEditMenuAvailable()
     // 如果窗口已经存在，直接显示
     if let window = aiConfigWindow {
       window.makeKeyAndOrderFront(nil)
@@ -110,7 +111,7 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
 
     // 创建配置窗口
     let window = NSWindow(
-      contentRect: NSRect(x: 0, y: 0, width: 500, height: 280),
+      contentRect: NSRect(x: 0, y: 0, width: 520, height: 360),
       styleMask: [.titled, .closable],
       backing: .buffered,
       defer: false
@@ -124,9 +125,15 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
 
     // 读取当前配置
     let configPath = SquirrelApp.userDir.appending(component: "ai_pinyin.custom.yaml")
-    var currentBaseURL = "https://api.openai.com/v1/chat/completions"
+    let defaultOpenAIURL = "https://api.openai.com/v1/chat/completions"
+    let geminiModel = "gemini-2.5-flash"
+    let geminiURL = geminiEndpoint(for: geminiModel)
+    let grokURL = "https://api.x.ai/v1/chat/completions"
+    var currentBaseURL = defaultOpenAIURL
     var currentAPIKey = ""
-    var currentModel = "gpt-4o-mini"
+    let defaultOpenAIModel = "gpt-4o-mini"
+    let grokModel = "grok-4-fast-non-reasoning"
+    var currentModel = defaultOpenAIModel
 
     if FileManager.default.fileExists(atPath: configPath.path) {
       if let content = try? String(contentsOf: configPath) {
@@ -151,63 +158,123 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
         }
       }
     }
+    if isGeminiProvider(baseURL: currentBaseURL, model: currentModel) {
+      currentBaseURL = geminiEndpoint(for: currentModel)
+    } else {
+      currentBaseURL = normalizedChatCompletionsURL(from: currentBaseURL)
+    }
+
+    let isGeminiPreset = currentBaseURL.contains("generativelanguage.googleapis.com") ||
+      currentModel.lowercased().contains("gemini")
+    let isGrokPreset = currentBaseURL.contains("api.x.ai") ||
+      currentModel.lowercased().contains("grok")
 
     // 创建标签和输入框
-    let yStart: CGFloat = 220
+    let yStart: CGFloat = 280
     let labelWidth: CGFloat = 120
     let fieldWidth: CGFloat = 340
-    let rowHeight: CGFloat = 60
+    let rowHeight: CGFloat = 55
+
+    // Provider Preset
+    let providerLabel = NSTextField(labelWithString: "配置预设:")
+    providerLabel.frame = NSRect(x: 20, y: yStart, width: labelWidth, height: 20)
+    providerLabel.alignment = .right
+    contentView.addSubview(providerLabel)
+
+    let providerPopup = NSPopUpButton(frame: NSRect(x: 150, y: yStart - 5, width: fieldWidth, height: 24))
+    providerPopup.addItems(withTitles: ["自定义 (OpenAI 兼容)", "Gemini 2.5 Flash", "Grok 4 Fast"])
+    if isGeminiPreset {
+      providerPopup.selectItem(at: 1)
+    } else if isGrokPreset {
+      providerPopup.selectItem(at: 2)
+    } else {
+      providerPopup.selectItem(at: 0)
+    }
+    providerPopup.target = self
+    providerPopup.action = #selector(providerChanged(_:))
+    contentView.addSubview(providerPopup)
 
     // Base URL
     let baseURLLabel = NSTextField(labelWithString: "API Base URL:")
-    baseURLLabel.frame = NSRect(x: 20, y: yStart, width: labelWidth, height: 20)
+    baseURLLabel.frame = NSRect(x: 20, y: yStart - rowHeight, width: labelWidth, height: 20)
     baseURLLabel.alignment = .right
     contentView.addSubview(baseURLLabel)
 
     let baseURLField = NSTextField(string: currentBaseURL)
-    baseURLField.frame = NSRect(x: 150, y: yStart - 5, width: fieldWidth, height: 24)
-    baseURLField.placeholderString = "https://api.openai.com/v1/chat/completions"
+    baseURLField.frame = NSRect(x: 150, y: yStart - rowHeight - 5, width: fieldWidth, height: 24)
+    baseURLField.isSelectable = true
+    baseURLField.isEditable = true
+    if isGeminiPreset {
+      baseURLField.placeholderString = geminiURL
+    } else if isGrokPreset {
+      baseURLField.placeholderString = grokURL
+    } else {
+      baseURLField.placeholderString = defaultOpenAIURL
+    }
     contentView.addSubview(baseURLField)
 
     // API Key
     let apiKeyLabel = NSTextField(labelWithString: "API Key:")
-    apiKeyLabel.frame = NSRect(x: 20, y: yStart - rowHeight, width: labelWidth, height: 20)
+    apiKeyLabel.frame = NSRect(x: 20, y: yStart - rowHeight * 2, width: labelWidth, height: 20)
     apiKeyLabel.alignment = .right
     contentView.addSubview(apiKeyLabel)
 
-    let apiKeyField = NSSecureTextField(string: currentAPIKey)
-    apiKeyField.frame = NSRect(x: 150, y: yStart - rowHeight - 5, width: fieldWidth, height: 24)
-    apiKeyField.placeholderString = "sk-..."
+    // Use a standard text field so API keys can be copied/pasted like other fields.
+    let apiKeyField = NSTextField(string: currentAPIKey)
+    apiKeyField.frame = NSRect(x: 150, y: yStart - rowHeight * 2 - 5, width: fieldWidth, height: 24)
+    apiKeyField.isSelectable = true
+    apiKeyField.isEditable = true
+    if isGeminiPreset {
+      apiKeyField.placeholderString = "AIza..."
+    } else if isGrokPreset {
+      apiKeyField.placeholderString = "xai-..."
+    } else {
+      apiKeyField.placeholderString = "sk-..."
+    }
     contentView.addSubview(apiKeyField)
 
     // Model Name
     let modelLabel = NSTextField(labelWithString: "模型名称:")
-    modelLabel.frame = NSRect(x: 20, y: yStart - rowHeight * 2, width: labelWidth, height: 20)
+    modelLabel.frame = NSRect(x: 20, y: yStart - rowHeight * 3, width: labelWidth, height: 20)
     modelLabel.alignment = .right
     contentView.addSubview(modelLabel)
 
     let modelField = NSTextField(string: currentModel)
-    modelField.frame = NSRect(x: 150, y: yStart - rowHeight * 2 - 5, width: fieldWidth, height: 24)
-    modelField.placeholderString = "gpt-4o-mini"
+    modelField.frame = NSRect(x: 150, y: yStart - rowHeight * 3 - 5, width: fieldWidth, height: 24)
+    modelField.isSelectable = true
+    modelField.isEditable = true
+    if isGeminiPreset {
+      modelField.placeholderString = geminiModel
+    } else if isGrokPreset {
+      modelField.placeholderString = grokModel
+    } else {
+      modelField.placeholderString = defaultOpenAIModel
+    }
     contentView.addSubview(modelField)
 
     // 状态标签
     let statusLabel = NSTextField(labelWithString: "")
-    statusLabel.frame = NSRect(x: 20, y: 50, width: 460, height: 20)
+    statusLabel.frame = NSRect(x: 20, y: 70, width: 480, height: 20)
     statusLabel.alignment = .center
-    statusLabel.textColor = .systemGreen
+    statusLabel.textColor = .secondaryLabelColor
     contentView.addSubview(statusLabel)
+
+    // 测试按钮
+    let testButton = NSButton(title: "测试连接", target: nil, action: nil)
+    testButton.frame = NSRect(x: 20, y: 20, width: 100, height: 32)
+    testButton.bezelStyle = .rounded
+    contentView.addSubview(testButton)
 
     // 保存按钮
     let saveButton = NSButton(title: "保存", target: nil, action: nil)
-    saveButton.frame = NSRect(x: 300, y: 15, width: 80, height: 32)
+    saveButton.frame = NSRect(x: 300, y: 20, width: 80, height: 32)
     saveButton.bezelStyle = .rounded
     saveButton.keyEquivalent = "\r"
     contentView.addSubview(saveButton)
 
     // 取消按钮
     let cancelButton = NSButton(title: "取消", target: nil, action: nil)
-    cancelButton.frame = NSRect(x: 390, y: 15, width: 80, height: 32)
+    cancelButton.frame = NSRect(x: 390, y: 20, width: 80, height: 32)
     cancelButton.bezelStyle = .rounded
     cancelButton.keyEquivalent = "\u{1b}"
     contentView.addSubview(cancelButton)
@@ -217,12 +284,18 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
     saveButton.action = #selector(saveAIConfig(_:))
     saveButton.tag = 0
 
+    testButton.target = self
+    testButton.action = #selector(testAIConfig(_:))
+
     // 存储字段引用
     aiConfigFields = [
+      "provider": providerPopup,
       "baseURL": baseURLField,
       "apiKey": apiKeyField,
       "model": modelField,
-      "status": statusLabel
+      "status": statusLabel,
+      "saveButton": saveButton,
+      "testButton": testButton
     ] as [String : Any]
 
     // 取消按钮处理
@@ -237,10 +310,148 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
     NSApp.activate(ignoringOtherApps: true)
   }
 
+  private func ensureEditMenuAvailable() {
+    guard NSApp.mainMenu == nil else { return }
+
+    let mainMenu = NSMenu(title: "MainMenu")
+
+    let appMenuItem = NSMenuItem()
+    let appMenu = NSMenu(title: "Squirrel")
+    appMenuItem.submenu = appMenu
+    appMenu.addItem(withTitle: NSLocalizedString("Quit", comment: "Quit"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+    mainMenu.addItem(appMenuItem)
+
+    let editMenuItem = NSMenuItem()
+    let editMenu = NSMenu(title: NSLocalizedString("Edit", comment: "Edit"))
+    editMenuItem.submenu = editMenu
+
+    editMenu.addItem(withTitle: NSLocalizedString("Cut", comment: "Cut"), action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+    editMenu.addItem(withTitle: NSLocalizedString("Copy", comment: "Copy"), action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+    editMenu.addItem(withTitle: NSLocalizedString("Paste", comment: "Paste"), action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+    editMenu.addItem(withTitle: NSLocalizedString("Select All", comment: "Select All"), action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+
+    mainMenu.addItem(editMenuItem)
+    NSApp.mainMenu = mainMenu
+  }
+
+  private func normalizedChatCompletionsURL(from rawValue: String) -> String {
+    var trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return "" }
+    let lowered = trimmed.lowercased()
+    if lowered.contains(":generatecontent") {
+      return trimmed
+    }
+    if lowered.contains("/chat/completions") {
+      return trimmed
+    }
+
+    // Preserve query / fragment if provided.
+    var suffix = ""
+    if let hashRange = trimmed.range(of: "#") {
+      suffix = String(trimmed[hashRange.lowerBound...])
+      trimmed = String(trimmed[..<hashRange.lowerBound])
+    }
+    if let queryRange = trimmed.range(of: "?") {
+      let queryPart = String(trimmed[queryRange.lowerBound...])
+      suffix = queryPart + suffix
+      trimmed = String(trimmed[..<queryRange.lowerBound])
+    }
+
+    while trimmed.hasSuffix("/") {
+      trimmed.removeLast()
+    }
+    let normalizedLower = trimmed.lowercased()
+    let normalized: String
+    if normalizedLower.hasSuffix("/chat") {
+      normalized = trimmed + "/completions"
+    } else if normalizedLower.hasSuffix("/v1") {
+      normalized = trimmed + "/chat/completions"
+    } else {
+      normalized = trimmed + "/v1/chat/completions"
+    }
+    return suffix.isEmpty ? normalized : normalized + suffix
+  }
+
+  private func geminiEndpoint(for model: String) -> String {
+    let trimmedModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
+    let resolvedModel = trimmedModel.isEmpty ? "gemini-2.5-flash" : trimmedModel
+    return "https://generativelanguage.googleapis.com/v1beta/models/\(resolvedModel):generateContent"
+  }
+
+  private func ensureGeminiBaseURL(_ baseURL: String, model: String) -> String {
+    return geminiEndpoint(for: model)
+  }
+
+  private func isGeminiProvider(baseURL: String, model: String) -> Bool {
+    let lowerBase = baseURL.lowercased()
+    let lowerModel = model.lowercased()
+    return lowerBase.contains("generativelanguage.googleapis.com") || lowerModel.contains("gemini")
+  }
+
+  @objc private func providerChanged(_ sender: NSPopUpButton) {
+    guard let fields = aiConfigFields,
+          let baseURLField = fields["baseURL"] as? NSTextField,
+          let apiKeyField = fields["apiKey"] as? NSTextField,
+          let modelField = fields["model"] as? NSTextField else {
+      return
+    }
+
+    let defaultOpenAIURL = "https://api.openai.com/v1/chat/completions"
+    let grokURL = "https://api.x.ai/v1/chat/completions"
+    let defaultOpenAIModel = "gpt-4o-mini"
+    let geminiModel = "gemini-2.5-flash"
+    let grokModel = "grok-4-fast-non-reasoning"
+    let trimmedModelValue = modelField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmedBaseValue = baseURLField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    let isGeminiBase = trimmedBaseValue.lowercased().contains("generativelanguage.googleapis.com")
+
+    switch sender.indexOfSelectedItem {
+    case 1:
+      let resolvedModel: String
+      if trimmedModelValue.isEmpty || trimmedModelValue == defaultOpenAIModel || trimmedModelValue == grokModel {
+        resolvedModel = geminiModel
+        modelField.stringValue = resolvedModel
+      } else {
+        resolvedModel = trimmedModelValue
+      }
+      let suggestedGeminiURL = geminiEndpoint(for: resolvedModel)
+      let baseMatchesResolvedModel = trimmedBaseValue.lowercased().contains(resolvedModel.lowercased())
+      if trimmedBaseValue.isEmpty ||
+          trimmedBaseValue == defaultOpenAIURL ||
+          trimmedBaseValue == grokURL ||
+          !baseMatchesResolvedModel {
+        baseURLField.stringValue = suggestedGeminiURL
+      }
+      baseURLField.placeholderString = suggestedGeminiURL
+      apiKeyField.placeholderString = "AIza..."
+      modelField.placeholderString = geminiModel
+    case 2:
+      if trimmedBaseValue.isEmpty || trimmedBaseValue == defaultOpenAIURL || isGeminiBase {
+        baseURLField.stringValue = grokURL
+      }
+      if modelField.stringValue.isEmpty || modelField.stringValue == defaultOpenAIModel || modelField.stringValue == geminiModel {
+        modelField.stringValue = grokModel
+      }
+      baseURLField.placeholderString = grokURL
+      apiKeyField.placeholderString = "xai-..."
+      modelField.placeholderString = grokModel
+    default:
+      if trimmedBaseValue.isEmpty || isGeminiBase || trimmedBaseValue == grokURL {
+        baseURLField.stringValue = defaultOpenAIURL
+      }
+      if modelField.stringValue.isEmpty || modelField.stringValue == geminiModel || modelField.stringValue == grokModel {
+        modelField.stringValue = defaultOpenAIModel
+      }
+      baseURLField.placeholderString = defaultOpenAIURL
+      apiKeyField.placeholderString = "sk-..."
+      modelField.placeholderString = defaultOpenAIModel
+    }
+  }
+
   @objc private func saveAIConfig(_ sender: NSButton) {
     guard let fields = aiConfigFields,
           let baseURLField = fields["baseURL"] as? NSTextField,
-          let apiKeyField = fields["apiKey"] as? NSSecureTextField,
+          let apiKeyField = fields["apiKey"] as? NSTextField,
           let modelField = fields["model"] as? NSTextField,
           let statusLabel = fields["status"] as? NSTextField else {
       return
@@ -257,6 +468,15 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
       return
     }
 
+    let isGemini = isGeminiProvider(baseURL: baseURL, model: model)
+    let normalizedBaseURL: String
+    if isGemini {
+      normalizedBaseURL = ensureGeminiBaseURL(baseURL, model: model)
+    } else {
+      normalizedBaseURL = normalizedChatCompletionsURL(from: baseURL)
+    }
+    baseURLField.stringValue = normalizedBaseURL
+
     // 生成配置文件
     let configContent = """
     # ai_pinyin.custom.yaml
@@ -269,7 +489,7 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
       ai_completion/trigger_key: "Tab"
 
       # AI 模型配置
-      ai_completion/base_url: "\(baseURL)"
+      ai_completion/base_url: "\(normalizedBaseURL)"
       ai_completion/api_key: "\(apiKey)"
       ai_completion/model_name: "\(model)"
 
@@ -298,6 +518,169 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
       statusLabel.stringValue = "保存失败: \(error.localizedDescription)"
       statusLabel.textColor = NSColor.systemRed
     }
+  }
+
+  @objc private func testAIConfig(_ sender: NSButton) {
+    guard let fields = aiConfigFields,
+          let baseURLField = fields["baseURL"] as? NSTextField,
+          let apiKeyField = fields["apiKey"] as? NSTextField,
+          let modelField = fields["model"] as? NSTextField,
+          let statusLabel = fields["status"] as? NSTextField,
+          let saveButton = fields["saveButton"] as? NSButton,
+          let testButton = fields["testButton"] as? NSButton else {
+      return
+    }
+
+    let baseURL = baseURLField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    let apiKey = apiKeyField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    let model = modelField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+
+    guard !baseURL.isEmpty, !apiKey.isEmpty, !model.isEmpty else {
+      statusLabel.stringValue = "请先填写 Base URL、API Key 和模型"
+      statusLabel.textColor = .systemRed
+      return
+    }
+
+    let isGemini = isGeminiProvider(baseURL: baseURL, model: model)
+    let normalizedBaseURL: String
+    if isGemini {
+      normalizedBaseURL = ensureGeminiBaseURL(baseURL, model: model)
+    } else {
+      normalizedBaseURL = normalizedChatCompletionsURL(from: baseURL)
+    }
+    baseURLField.stringValue = normalizedBaseURL
+
+    guard let url = URL(string: normalizedBaseURL) else {
+      statusLabel.stringValue = "Base URL 无效"
+      statusLabel.textColor = .systemRed
+      return
+    }
+
+    statusLabel.stringValue = "测试中..."
+    statusLabel.textColor = .secondaryLabelColor
+    saveButton.isEnabled = false
+    testButton.isEnabled = false
+
+    let payload: [String: Any]
+    if isGemini {
+      payload = [
+        "contents": [
+          [
+            "role": "user",
+            "parts": [
+              ["text": "ping"]
+            ]
+          ]
+        ],
+        "generationConfig": [
+          "maxOutputTokens": 64
+        ]
+      ]
+    } else {
+      payload = [
+        "model": model,
+        "messages": [
+          ["role": "user", "content": "ping"]
+        ],
+        "temperature": 0,
+        "max_tokens": 32
+      ]
+    }
+
+    guard let body = try? JSONSerialization.data(withJSONObject: payload, options: []) else {
+      statusLabel.stringValue = "无法创建测试请求"
+      statusLabel.textColor = .systemRed
+      saveButton.isEnabled = true
+      testButton.isEnabled = true
+      return
+    }
+
+    var request = URLRequest(url: url)
+    request.httpMethod = "POST"
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    if isGemini {
+      request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
+    } else {
+      request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+    }
+    request.timeoutInterval = 8
+    request.httpBody = body
+
+    var sessionConfig = URLSessionConfiguration.ephemeral
+    sessionConfig.timeoutIntervalForRequest = 8
+    sessionConfig.timeoutIntervalForResource = 10
+    let session = URLSession(configuration: sessionConfig)
+
+    let task = session.dataTask(with: request) { data, response, error in
+      DispatchQueue.main.async {
+        saveButton.isEnabled = true
+        testButton.isEnabled = true
+
+        if let error = error {
+          statusLabel.stringValue = "连接失败：\(error.localizedDescription)"
+          statusLabel.textColor = .systemRed
+          return
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+          statusLabel.stringValue = "连接失败：未知响应"
+          statusLabel.textColor = .systemRed
+          return
+        }
+
+        guard httpResponse.statusCode == 200, let data = data else {
+          statusLabel.stringValue = "连接失败：HTTP \(httpResponse.statusCode)"
+          statusLabel.textColor = .systemRed
+          return
+        }
+
+        var preview = ""
+        var hasChoices = false
+        if let json = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] {
+          if isGemini {
+            if let candidates = json["candidates"] as? [[String: Any]] {
+              hasChoices = !candidates.isEmpty
+              if let first = candidates.first,
+                 let contentDict = first["content"] as? [String: Any],
+                 let parts = contentDict["parts"] as? [[String: Any]] {
+                for part in parts {
+                  if let text = part["text"] as? String {
+                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty {
+                      preview = trimmed
+                      break
+                    }
+                  }
+                }
+              }
+            }
+          } else if let choices = json["choices"] as? [[String: Any]] {
+            hasChoices = !choices.isEmpty
+            if let first = choices.first,
+               let message = first["message"] as? [String: Any],
+               let content = message["content"] as? String {
+              preview = content.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+          }
+        }
+
+        if preview.isEmpty {
+          if hasChoices {
+            statusLabel.stringValue = "连接成功：HTTP 200 (响应无文本，尝试提高 max_tokens)"
+            statusLabel.textColor = .systemOrange
+          } else {
+            statusLabel.stringValue = "连接失败：未返回内容"
+            statusLabel.textColor = .systemRed
+          }
+        } else {
+          let snippet = preview.count > 30 ? String(preview.prefix(30)) + "…" : preview
+          statusLabel.stringValue = "连接成功：\(snippet)"
+          statusLabel.textColor = .systemGreen
+        }
+      }
+    }
+
+    task.resume()
   }
 
   @objc private func closeAIConfig(_ sender: Any) {

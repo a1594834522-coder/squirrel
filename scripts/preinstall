@@ -1,0 +1,30 @@
+#!/bin/bash
+set -euo pipefail
+
+dst_root="${DSTROOT:-/Library/Input Methods}"
+squirrel_app_root="${dst_root}/Squirrel.app"
+
+# Ensure running Squirrel is stopped before removal
+/usr/bin/killall Squirrel >/dev/null 2>&1 || true
+
+# Remove existing installed app bundle (if any)
+if [ -e "${squirrel_app_root}" ]; then
+  rm -rf "${squirrel_app_root}"
+fi
+
+login_user=$(/usr/bin/stat -f%Su /dev/console 2>/dev/null || true)
+if [ -n "${login_user}" ] && [ "${login_user}" != "root" ]; then
+  # Resolve user home directory; fall back to /Users/<user>
+  user_home=$(/usr/bin/dscl . -read "/Users/${login_user}" NFSHomeDirectory 2>/dev/null | awk '{print $2}')
+  if [ -z "${user_home}" ]; then
+    user_home="/Users/${login_user}"
+  fi
+  if [ -d "${user_home}" ]; then
+    user_rime_dir="${user_home}/Library/Rime"
+    if [ -d "${user_rime_dir}" ]; then
+      rm -rf "${user_rime_dir}"
+    fi
+  fi
+fi
+
+exit 0

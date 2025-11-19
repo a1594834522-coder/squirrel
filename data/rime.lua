@@ -35,6 +35,7 @@ ai_config = ai_config or {
     grok_api_key = "YOUR_GROK_API_KEY_HERE",
     grok_model_name = "grok-4-fast",
     max_candidates = 3,
+    max_tokens = 200,
     system_prompt = [[你是一个中文输入法的句子级联想与补全助手，主要目标是帮助用户把「正在输入的这句话」自然地补完，而不是随意联想别的话题。
 
 使用场景：
@@ -63,6 +64,76 @@ ai_config = ai_config or {
 -- ============================================================================
 -- 工具函数
 -- ============================================================================
+
+local function json_escape(str)
+    if not str then
+        return ""
+    end
+    str = str:gsub("\\", "\\\\")
+    str = str:gsub('"', '\\"')
+    str = str:gsub("\n", "\\n")
+    str = str:gsub("\r", "\\r")
+    str = str:gsub("\t", "\\t")
+    return str
+end
+
+local function should_normalize_base_url(url)
+    if not url then
+        return false
+    end
+    local host = url:match("^https?://([^/]+)")
+    if not host then
+        return false
+    end
+    host = host:lower()
+    return host == "api.openai.com" or host == "api.x.ai"
+end
+
+local function join_paths(base, suffix)
+    local has_slash_base = base:sub(-1) == "/"
+    local has_slash_suffix = suffix:sub(1, 1) == "/"
+    if has_slash_base and has_slash_suffix then
+        return base .. suffix:sub(2)
+    elseif not has_slash_base and not has_slash_suffix then
+        return base .. "/" .. suffix
+    end
+    return base .. suffix
+end
+
+local function normalize_base_url(url)
+    if not url or url == "" then
+        return url
+    end
+    local trimmed = url:gsub("^%s+", ""):gsub("%s+$", "")
+    local lower = trimmed:lower()
+    if lower:find("/chat/completions", 1, true) then
+        return trimmed
+    end
+    if not should_normalize_base_url(trimmed) then
+        return trimmed
+    end
+    if lower:match("/chat/?$") then
+        return join_paths(trimmed, "/completions")
+    end
+    if lower:match("/v1/?$") then
+        return join_paths(trimmed, "/chat/completions")
+    end
+    return join_paths(trimmed, "/v1/chat/completions")
+end
+
+ai_config.base_url = normalize_base_url(ai_config.base_url)
+
+local function is_gemini_provider()
+    local base = (ai_config.base_url or ""):lower()
+    local model = (ai_config.model_name or ""):lower()
+    if base:find("generativelanguage%.googleapis%.com", 1, true) ~= nil then
+        return true
+    end
+    if base:find(":generatecontent", 1, true) ~= nil then
+        return true
+    end
+    return model:find("gemini", 1, true) ~= nil
+end
 
 -- 获取当前时间戳（秒）
 local function get_timestamp()
@@ -139,7 +210,7 @@ local function load_ai_config_from_file()
 
     local base_url = extract("ai_completion/base_url")
     if base_url and base_url ~= "" then
-        ai_config.base_url = base_url
+        ai_config.base_url = normalize_base_url(base_url)
     end
 
     local api_key = extract("ai_completion/api_key")
@@ -151,9 +222,89 @@ local function load_ai_config_from_file()
     if model_name and model_name ~= "" then
         ai_config.model_name = model_name
     end
+
+    local max_tokens_value = extract("ai_completion/max_tokens")
+    if max_tokens_value and max_tokens_value ~= "" then
+        local number_value = tonumber(max_tokens_value)
+        if number_value and number_value > 0 then
+            ai_config.max_tokens = number_value
+        end
+    end
 end
 
 load_ai_config_from_file()
+
+local function resolve_api_endpoint()
+    if is_gemini_provider() then
+        local model = ai_config.model_name
+        if not model or model == "" then
+            model = "gemini-2.5-flash"
+        end
+        return "https://generativelanguage.googleapis.com/v1beta/models/" .. model .. ":generateContent"
+    end
+    return ai_config.base_url
+end
+
+local function build_request_headers()
+    if is_gemini_provider() then
+        return {
+            ["Content-Type"] = "application/json",
+            ["x-goog-api-key"] = ai_config.api_key
+        }
+    end
+    return {
+        ["Content-Type"] = "application/json",
+        ["Authorization"] = "Bearer " .. ai_config.api_key
+    }
+end
+
+local function build_openai_request_body(system_prompt, user_prompt, temperature, max_tokens)
+    return string.format([[{
+        "model": "%s",
+        "messages": [
+            {"role": "system", "content": "%s"},
+            {"role": "user", "content": "%s"}
+        ],
+        "temperature": %.2f,
+        "max_tokens": %d
+    }]],
+        ai_config.model_name,
+        json_escape(system_prompt),
+        json_escape(user_prompt),
+        temperature or 0,
+        max_tokens or 200
+    )
+end
+
+local function build_gemini_request_body(system_prompt, user_prompt, temperature, max_tokens)
+    local combined = (system_prompt or "") .. "\n\n" .. (user_prompt or "")
+    local config_parts = {}
+    if temperature then
+        table.insert(config_parts, string.format('"temperature": %.2f', temperature))
+    end
+    local generation_config = ""
+    if #config_parts > 0 then
+        generation_config = string.format(', "generationConfig": {%s}', table.concat(config_parts, ","))
+    end
+
+    return string.format([[{
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {"text": "%s"}
+                ]
+            }
+        ]%s
+    }]], json_escape(combined), generation_config)
+end
+
+local function build_request_body(system_prompt, user_prompt, temperature, max_tokens)
+    if is_gemini_provider() then
+        return build_gemini_request_body(system_prompt, user_prompt, temperature, max_tokens)
+    end
+    return build_openai_request_body(system_prompt, user_prompt, temperature, max_tokens)
+end
 
 -- 写入调试日志
 local function debug_log(message)
@@ -229,8 +380,8 @@ local function http_post(url, headers, body)
     return result, nil
 end
 
--- 解析 JSON 响应（改进的实现）
-local function parse_json_response(json_str)
+-- 解析 OpenAI / Grok 响应
+local function parse_openai_response(json_str)
     if not json_str or json_str == "" then
         debug_log("ERROR: Empty JSON response")
         return nil
@@ -271,6 +422,55 @@ local function parse_json_response(json_str)
 
     debug_log("ERROR: Failed to parse content from JSON")
     return nil
+end
+
+local function parse_gemini_response(json_str)
+    if not json_str or json_str == "" then
+        debug_log("ERROR: Empty JSON response")
+        return nil
+    end
+    local start_idx = json_str:find('"candidates"')
+    if not start_idx then
+        debug_log("ERROR: Gemini response missing candidates")
+        return nil
+    end
+
+    local texts = {}
+    for text in json_str:sub(start_idx):gmatch('"text"%s*:%s*"(.-)"') do
+        local cleaned = text:gsub('\\n', '\n')
+        cleaned = cleaned:gsub('\\r', '\r')
+        cleaned = cleaned:gsub('\\t', '\t')
+        cleaned = cleaned:gsub('\\"', '"')
+        cleaned = cleaned:gsub('\\\\', '\\')
+        cleaned = cleaned:gsub("^%s+", ""):gsub("%s+$", "")
+        if cleaned ~= "" then
+            table.insert(texts, cleaned)
+        end
+    end
+
+    if #texts == 0 then
+        local finish_reason = json_str:match('"finishReason"%s*:%s*"(.-)"')
+        if finish_reason then
+            debug_log("ERROR: Gemini response has no text parts (finishReason=" .. finish_reason .. ")")
+        else
+            debug_log("ERROR: Gemini response has no text parts")
+        end
+        return nil
+    end
+
+    local content = table.concat(texts, "\n")
+    debug_log("Parsed Gemini content length: " .. #content)
+    return content
+end
+
+local function parse_ai_response(json_str)
+    if is_gemini_provider() then
+        local gemini_content = parse_gemini_response(json_str)
+        if gemini_content then
+            return gemini_content
+        end
+    end
+    return parse_openai_response(json_str)
 end
 
 -- 生成贴本意的查询/请求补全（用于第一次 Command），只参考当前拼音和候选列表（不使用历史上下文）
@@ -319,34 +519,19 @@ local function generate_question(pinyin, raw_candidates)
         candidates_text
     )
 
-    local request_body = string.format([[{
-        "model": "%s",
-        "messages": [
-            {"role": "system", "content": "%s"},
-            {"role": "user", "content": "%s"}
-        ],
-        "temperature": 0.1,
-        "max_tokens": 300
-    }]],
-        ai_config.model_name,
-        system_prompt:gsub('"', '\\"'):gsub('\n', '\\n'),
-        user_prompt:gsub('"', '\\"'):gsub('\n', '\\n')
-    )
+    local request_body = build_request_body(system_prompt, user_prompt, 0.1, 300)
 
-    local headers = {
-        ["Content-Type"] = "application/json",
-        ["Authorization"] = "Bearer " .. ai_config.api_key
-    }
+    local headers = build_request_headers()
 
-    local response, err = http_post(ai_config.base_url, headers, request_body)
+    local response, err = http_post(resolve_api_endpoint(), headers, request_body)
     if err or not response then
         debug_log("ERROR: Failed to generate questions")
         return nil
     end
 
-    local content = parse_json_response(response)
+    local content = parse_ai_response(response)
     if not content or content == "" then
-        debug_log("ERROR: Empty content from parse_json_response")
+        debug_log("ERROR: Empty content from parse_ai_response")
         return nil
     end
 
@@ -404,34 +589,19 @@ local function answer_question(question)
         question
     )
 
-    local request_body = string.format([[{
-        "model": "%s",
-        "messages": [
-            {"role": "system", "content": "%s"},
-            {"role": "user", "content": "%s"}
-        ],
-        "temperature": 0.3,
-        "max_tokens": 500
-    }]],
-        ai_config.model_name,
-        system_prompt:gsub('"', '\\"'):gsub('\n', '\\n'),
-        user_prompt:gsub('"', '\\"'):gsub('\n', '\\n')
-    )
+    local request_body = build_request_body(system_prompt, user_prompt, 0.3, 500)
 
-    local headers = {
-        ["Content-Type"] = "application/json",
-        ["Authorization"] = "Bearer " .. ai_config.api_key
-    }
+    local headers = build_request_headers()
 
-    local response, err = http_post(ai_config.base_url, headers, request_body)
+    local response, err = http_post(resolve_api_endpoint(), headers, request_body)
     if err or not response then
         debug_log("ERROR: Failed to answer question")
         return nil
     end
 
-    local content = parse_json_response(response)
+    local content = parse_ai_response(response)
     if not content or content == "" then
-        debug_log("ERROR: Empty content from parse_json_response")
+        debug_log("ERROR: Empty content from parse_ai_response")
         return nil
     end
 
@@ -520,36 +690,21 @@ local function call_ai_api(current_pinyin, history_context, raw_candidates)
     end
 
     -- 构建请求体
-    local request_body = string.format([[{
-        "model": "%s",
-        "messages": [
-            {"role": "system", "content": "%s"},
-            {"role": "user", "content": "%s"}
-        ],
-        "temperature": 0.2,
-        "max_tokens": 200
-    }]],
-        ai_config.model_name,
-        ai_config.system_prompt:gsub('"', '\\"'):gsub('\n', '\\n'),
-        user_prompt:gsub('"', '\\"'):gsub('\n', '\\n')
-    )
+    local request_body = build_request_body(ai_config.system_prompt, user_prompt, 0.2, ai_config.max_tokens or 200)
 
     debug_log("Request body: " .. request_body)
 
     -- 发送请求
-    local headers = {
-        ["Content-Type"] = "application/json",
-        ["Authorization"] = "Bearer " .. ai_config.api_key
-    }
+    local headers = build_request_headers()
 
-    local response, err = http_post(ai_config.base_url, headers, request_body)
+    local response, err = http_post(resolve_api_endpoint(), headers, request_body)
     if err or not response then
         debug_log("ERROR: HTTP request failed - " .. (err or "no response"))
         return nil
     end
 
     -- 解析响应
-    local content = parse_json_response(response)
+    local content = parse_ai_response(response)
     if not content then
         debug_log("ERROR: Failed to parse JSON response")
         return nil

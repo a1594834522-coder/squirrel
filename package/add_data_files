@@ -112,12 +112,13 @@ add_lib() {
 }
 
 
+# Collect data and plugin files (avoid ARG_MAX issues by iterating within dirs)
 data_files=(
-    $(ls data/plum/* | xargs basename)
+    $(cd data/plum && find . -maxdepth 1 -type f -print | sed 's|^\./||' | sort)
 )
 
 lib_files=(
-    $(ls lib/rime-plugins/* | xargs basename)
+    $(cd lib/rime-plugins && find . -maxdepth 1 -type f -print | sed 's|^\./||' | sort)
 )
 
 for file in "${data_files[@]}"

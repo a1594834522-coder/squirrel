@@ -106,12 +106,59 @@ local config = {
     api_key = "",
     model_name = "gpt-3.5-turbo",
     context_window_minutes = 5,
-    max_candidates = 3
+    max_candidates = 3,
+    max_tokens = 200
 }
 
 -- 输入历史缓冲区（用于保存最近的输入）
 local input_history = {}
 local MAX_HISTORY_SIZE = 100
+
+local function should_normalize_base_url(url)
+    if not url then
+        return false
+    end
+    local host = url:match("^https?://([^/]+)")
+    if not host then
+        return false
+    end
+    host = host:lower()
+    return host == "api.openai.com" or host == "api.x.ai"
+end
+
+local function join_paths(base, suffix)
+    local has_slash_base = base:sub(-1) == "/"
+    local has_slash_suffix = suffix:sub(1, 1) == "/"
+    if has_slash_base and has_slash_suffix then
+        return base .. suffix:sub(2)
+    elseif not has_slash_base and not has_slash_suffix then
+        return base .. "/" .. suffix
+    end
+    return base .. suffix
+end
+
+local function normalize_base_url(url)
+    if not url or url == "" then
+        return url
+    end
+    local trimmed = url:gsub("^%s+", ""):gsub("%s+$", "")
+    local lower = trimmed:lower()
+    if lower:find("/chat/completions", 1, true) then
+        return trimmed
+    end
+    if not should_normalize_base_url(trimmed) then
+        return trimmed
+    end
+    if lower:match("/chat/?$") then
+        return join_paths(trimmed, "/completions")
+    end
+    if lower:match("/v1/?$") then
+        return join_paths(trimmed, "/chat/completions")
+    end
+    return join_paths(trimmed, "/v1/chat/completions")
+end
+
+config.base_url = normalize_base_url(config.base_url)
 
 -- 添加输入到历史记录
 local function add_to_history(text)
@@ -146,6 +193,47 @@ local function get_recent_context(minutes)
 end
 
 -- ==================== AI API 调用 ====================
+local function is_gemini_model()
+    local base = string.lower(config.base_url or "")
+    local model = string.lower(config.model_name or "")
+    if string.find(base, "generativelanguage.googleapis.com", 1, true) ~= nil then
+        return true
+    end
+    if string.find(base, ":generatecontent", 1, true) ~= nil then
+        return true
+    end
+    return string.find(model, "gemini", 1, true) ~= nil
+end
+
+local function resolve_gemini_endpoint()
+    local model = config.model_name or "gemini-2.5-flash"
+    return "https://generativelanguage.googleapis.com/v1beta/models/" .. model .. ":generateContent"
+end
+
+local function extract_gemini_text(response)
+    local start_idx = string.find(response or "", '"candidates"')
+    if not start_idx then
+        return nil
+    end
+    local texts = {}
+    for text in string.gmatch(string.sub(response, start_idx), '"text"%s*:%s*"(.-)"') do
+        local cleaned = text
+        cleaned = string.gsub(cleaned, '\\n', '\n')
+        cleaned = string.gsub(cleaned, '\\r', '\r')
+        cleaned = string.gsub(cleaned, '\\t', '\t')
+        cleaned = string.gsub(cleaned, '\\"', '"')
+        cleaned = string.gsub(cleaned, '\\\\', '\\')
+        cleaned = string.gsub(cleaned, "^%s+", "")
+        cleaned = string.gsub(cleaned, "%s+$", "")
+        if cleaned ~= "" then
+            table.insert(texts, cleaned)
+        end
+    end
+    if #texts == 0 then
+        return nil
+    end
+    return table.concat(texts, "\n")
+end
 
 -- 使用 curl 调用 AI API
 local function call_ai_api(context, current_input)
@@ -163,23 +251,52 @@ local function call_ai_api(context, current_input)
 
     prompt = prompt .. "当前输入：" .. current_input .. "\n\n补全："
 
-    -- 构建请求 payload
-    local payload = {
-        model = config.model_name,
-        messages = {
-            {
-                role = "system",
-                content = "你是一个智能输入法助手。根据用户的输入历史和当前输入，提供简洁的补全建议。每个建议一行，不要编号，不要额外解释。"
+    local url = config.base_url
+    local header_parts
+    local payload
+
+    if is_gemini_model() then
+        payload = {
+            contents = {
+                {
+                    role = "user",
+                    parts = {
+                        { text = prompt }
+                    }
+                }
             },
-            {
-                role = "user",
-                content = prompt
+            generationConfig = {
+                maxOutputTokens = config.max_tokens or 200,
+                temperature = 0.7
             }
-        },
-        max_tokens = 100,
-        temperature = 0.7,
-        n = 1
-    }
+        }
+        url = resolve_gemini_endpoint()
+        header_parts = {
+            '-H "Content-Type: application/json"',
+            string.format('-H "x-goog-api-key: %s"', config.api_key)
+        }
+    else
+        payload = {
+            model = config.model_name,
+            messages = {
+                {
+                    role = "system",
+                    content = "你是一个智能输入法助手。根据用户的输入历史和当前输入，提供简洁的补全建议。每个建议一行，不要编号，不要额外解释。"
+                },
+                {
+                    role = "user",
+                    content = prompt
+                }
+            },
+            max_tokens = config.max_tokens or 200,
+            temperature = 0.7,
+            n = 1
+        }
+        header_parts = {
+            '-H "Content-Type: application/json"',
+            string.format('-H "Authorization: Bearer %s"', config.api_key)
+        }
+    end
 
     local json_payload = json_encode(payload)
 
@@ -194,9 +311,9 @@ local function call_ai_api(context, current_input)
 
     -- 使用 curl 发送请求
     local curl_cmd = string.format(
-        'curl -s -m 5 -X POST "%s" -H "Content-Type: application/json" -H "Authorization: Bearer %s" -d @%s',
-        config.base_url,
-        config.api_key,
+        'curl -s -m 5 -X POST "%s" %s -d @%s',
+        url,
+        table.concat(header_parts, " "),
         temp_file
     )
 
@@ -215,18 +332,21 @@ local function call_ai_api(context, current_input)
         return nil, "API 无响应"
     end
 
-    -- 解析 JSON 响应
-    local decoder = json_decode(response)
-
-    -- 提取内容
-    local content = decoder.extract_field(response, "content")
-
-    if not content then
-        -- 尝试提取错误信息
-        local error_msg = decoder.extract_field(response, "error") or
-                         decoder.extract_field(response, "message") or
-                         "API 返回格式错误"
-        return nil, error_msg
+    local content
+    if is_gemini_model() then
+        content = extract_gemini_text(response)
+        if not content then
+            return nil, "API 返回内容为空"
+        end
+    else
+        local decoder = json_decode(response)
+        content = decoder.extract_field(response, "content")
+        if not content then
+            local error_msg = decoder.extract_field(response, "error") or
+                             decoder.extract_field(response, "message") or
+                             "API 返回格式错误"
+            return nil, error_msg
+        end
     end
 
     -- 将内容分割成多个候选项
@@ -342,7 +462,7 @@ function M.init(env)
 
         local base_url = conf:get_string("ai_completion/base_url")
         if base_url and base_url ~= "" then
-            config.base_url = base_url
+            config.base_url = normalize_base_url(base_url)
         end
 
         local api_key = conf:get_string("ai_completion/api_key")
@@ -358,6 +478,11 @@ function M.init(env)
         local context_window = conf:get_int("ai_completion/context_window_minutes")
         if context_window and context_window > 0 then
             config.context_window_minutes = context_window
+        end
+
+        local max_tokens = conf:get_int("ai_completion/max_tokens")
+        if max_tokens and max_tokens > 0 then
+            config.max_tokens = max_tokens
         end
     end
 
@@ -375,6 +500,9 @@ function M.init(env)
         end
         if config.max_candidates then
             _G.ai_config.max_candidates = config.max_candidates
+        end
+        if config.max_tokens then
+            _G.ai_config.max_tokens = config.max_tokens
         end
     end
     if _G.context_window_minutes and config.context_window_minutes then
