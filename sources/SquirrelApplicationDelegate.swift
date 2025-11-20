@@ -128,11 +128,11 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
     let defaultOpenAIURL = "https://api.openai.com/v1/chat/completions"
     let geminiModel = "gemini-2.5-flash"
     let geminiURL = geminiEndpoint(for: geminiModel)
-    let grokURL = "https://api.x.ai/v1/chat/completions"
+    let grokURL = "https://api.x.ai/v1/responses"
     var currentBaseURL = defaultOpenAIURL
     var currentAPIKey = ""
     let defaultOpenAIModel = "gpt-4o-mini"
-    let grokModel = "grok-4-fast-non-reasoning"
+    let grokModel = "grok-4-fast"
     var currentModel = defaultOpenAIModel
 
     if FileManager.default.fileExists(atPath: configPath.path) {
@@ -160,14 +160,14 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
     }
     if isGeminiProvider(baseURL: currentBaseURL, model: currentModel) {
       currentBaseURL = geminiEndpoint(for: currentModel)
+    } else if isGrokProvider(baseURL: currentBaseURL, model: currentModel) {
+      currentBaseURL = normalizedGrokResponsesURL(from: currentBaseURL)
     } else {
       currentBaseURL = normalizedChatCompletionsURL(from: currentBaseURL)
     }
 
-    let isGeminiPreset = currentBaseURL.contains("generativelanguage.googleapis.com") ||
-      currentModel.lowercased().contains("gemini")
-    let isGrokPreset = currentBaseURL.contains("api.x.ai") ||
-      currentModel.lowercased().contains("grok")
+    let isGeminiPreset = isGeminiProvider(baseURL: currentBaseURL, model: currentModel)
+    let isGrokPreset = !isGeminiPreset && isGrokProvider(baseURL: currentBaseURL, model: currentModel)
 
     // 创建标签和输入框
     let yStart: CGFloat = 280
@@ -335,41 +335,11 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
   }
 
   private func normalizedChatCompletionsURL(from rawValue: String) -> String {
-    var trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else { return "" }
-    let lowered = trimmed.lowercased()
-    if lowered.contains(":generatecontent") {
-      return trimmed
-    }
-    if lowered.contains("/chat/completions") {
-      return trimmed
-    }
+    rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
 
-    // Preserve query / fragment if provided.
-    var suffix = ""
-    if let hashRange = trimmed.range(of: "#") {
-      suffix = String(trimmed[hashRange.lowerBound...])
-      trimmed = String(trimmed[..<hashRange.lowerBound])
-    }
-    if let queryRange = trimmed.range(of: "?") {
-      let queryPart = String(trimmed[queryRange.lowerBound...])
-      suffix = queryPart + suffix
-      trimmed = String(trimmed[..<queryRange.lowerBound])
-    }
-
-    while trimmed.hasSuffix("/") {
-      trimmed.removeLast()
-    }
-    let normalizedLower = trimmed.lowercased()
-    let normalized: String
-    if normalizedLower.hasSuffix("/chat") {
-      normalized = trimmed + "/completions"
-    } else if normalizedLower.hasSuffix("/v1") {
-      normalized = trimmed + "/chat/completions"
-    } else {
-      normalized = trimmed + "/v1/chat/completions"
-    }
-    return suffix.isEmpty ? normalized : normalized + suffix
+  private func normalizedGrokResponsesURL(from rawValue: String) -> String {
+    rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
   private func geminiEndpoint(for model: String) -> String {
@@ -388,6 +358,15 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
     return lowerBase.contains("generativelanguage.googleapis.com") || lowerModel.contains("gemini")
   }
 
+  private func isGrokProvider(baseURL: String, model: String) -> Bool {
+    let lowerBase = baseURL.lowercased()
+    let lowerModel = model.lowercased()
+    if lowerBase.contains("api.x.ai") || lowerBase.contains("/responses") {
+      return true
+    }
+    return lowerModel.contains("grok")
+  }
+
   @objc private func providerChanged(_ sender: NSPopUpButton) {
     guard let fields = aiConfigFields,
           let baseURLField = fields["baseURL"] as? NSTextField,
@@ -397,13 +376,16 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
     }
 
     let defaultOpenAIURL = "https://api.openai.com/v1/chat/completions"
-    let grokURL = "https://api.x.ai/v1/chat/completions"
+    let grokURL = "https://api.x.ai/v1/responses"
     let defaultOpenAIModel = "gpt-4o-mini"
     let geminiModel = "gemini-2.5-flash"
-    let grokModel = "grok-4-fast-non-reasoning"
+    let grokModel = "grok-4-fast"
     let trimmedModelValue = modelField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
     let trimmedBaseValue = baseURLField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-    let isGeminiBase = trimmedBaseValue.lowercased().contains("generativelanguage.googleapis.com")
+    let lowerBaseValue = trimmedBaseValue.lowercased()
+    let isGeminiBase = lowerBaseValue.contains("generativelanguage.googleapis.com")
+    let isLegacyGrokBase = lowerBaseValue.contains("api.x.ai") && lowerBaseValue.contains("/chat/completions")
+    let isGrokBase = lowerBaseValue.contains("api.x.ai") || lowerBaseValue.contains("/responses")
 
     switch sender.indexOfSelectedItem {
     case 1:
@@ -426,7 +408,7 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
       apiKeyField.placeholderString = "AIza..."
       modelField.placeholderString = geminiModel
     case 2:
-      if trimmedBaseValue.isEmpty || trimmedBaseValue == defaultOpenAIURL || isGeminiBase {
+      if trimmedBaseValue.isEmpty || trimmedBaseValue == defaultOpenAIURL || isGeminiBase || isLegacyGrokBase {
         baseURLField.stringValue = grokURL
       }
       if modelField.stringValue.isEmpty || modelField.stringValue == defaultOpenAIModel || modelField.stringValue == geminiModel {
@@ -436,7 +418,7 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
       apiKeyField.placeholderString = "xai-..."
       modelField.placeholderString = grokModel
     default:
-      if trimmedBaseValue.isEmpty || isGeminiBase || trimmedBaseValue == grokURL {
+      if trimmedBaseValue.isEmpty || isGeminiBase || isGrokBase {
         baseURLField.stringValue = defaultOpenAIURL
       }
       if modelField.stringValue.isEmpty || modelField.stringValue == geminiModel || modelField.stringValue == grokModel {
@@ -469,9 +451,12 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
     }
 
     let isGemini = isGeminiProvider(baseURL: baseURL, model: model)
+    let isGrok = !isGemini && isGrokProvider(baseURL: baseURL, model: model)
     let normalizedBaseURL: String
     if isGemini {
       normalizedBaseURL = ensureGeminiBaseURL(baseURL, model: model)
+    } else if isGrok {
+      normalizedBaseURL = normalizedGrokResponsesURL(from: baseURL)
     } else {
       normalizedBaseURL = normalizedChatCompletionsURL(from: baseURL)
     }
@@ -542,9 +527,12 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
     }
 
     let isGemini = isGeminiProvider(baseURL: baseURL, model: model)
+    let isGrok = !isGemini && isGrokProvider(baseURL: baseURL, model: model)
     let normalizedBaseURL: String
     if isGemini {
       normalizedBaseURL = ensureGeminiBaseURL(baseURL, model: model)
+    } else if isGrok {
+      normalizedBaseURL = normalizedGrokResponsesURL(from: baseURL)
     } else {
       normalizedBaseURL = normalizedChatCompletionsURL(from: baseURL)
     }
@@ -574,6 +562,19 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
         ],
         "generationConfig": [
           "maxOutputTokens": 64
+        ]
+      ]
+    } else if isGrok {
+      payload = [
+        "model": model,
+        "input": [
+          [
+            "role": "user",
+            "content": "ping"
+          ]
+        ],
+        "tools": [
+          ["type": "web_search"]
         ]
       ]
     } else {
@@ -649,6 +650,29 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
                     if !trimmed.isEmpty {
                       preview = trimmed
                       break
+                    }
+                  }
+                }
+              }
+            }
+          } else if isGrok {
+            if let outputs = json["output_text"] as? [String] {
+              hasChoices = !outputs.isEmpty
+              if let first = outputs.first {
+                preview = first.trimmingCharacters(in: .whitespacesAndNewlines)
+              }
+            }
+            if preview.isEmpty, let outputBlocks = json["output"] as? [[String: Any]] {
+              hasChoices = hasChoices || !outputBlocks.isEmpty
+              outer: for block in outputBlocks {
+                if let contents = block["content"] as? [[String: Any]] {
+                  for entry in contents {
+                    if let text = entry["text"] as? String {
+                      let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                      if !trimmed.isEmpty {
+                        preview = trimmed
+                        break outer
+                      }
                     }
                   }
                 }

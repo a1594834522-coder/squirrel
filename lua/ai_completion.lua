@@ -114,48 +114,11 @@ local config = {
 local input_history = {}
 local MAX_HISTORY_SIZE = 100
 
-local function should_normalize_base_url(url)
-    if not url then
-        return false
-    end
-    local host = url:match("^https?://([^/]+)")
-    if not host then
-        return false
-    end
-    host = host:lower()
-    return host == "api.openai.com" or host == "api.x.ai"
-end
-
-local function join_paths(base, suffix)
-    local has_slash_base = base:sub(-1) == "/"
-    local has_slash_suffix = suffix:sub(1, 1) == "/"
-    if has_slash_base and has_slash_suffix then
-        return base .. suffix:sub(2)
-    elseif not has_slash_base and not has_slash_suffix then
-        return base .. "/" .. suffix
-    end
-    return base .. suffix
-end
-
 local function normalize_base_url(url)
-    if not url or url == "" then
-        return url
+    if not url then
+        return ""
     end
-    local trimmed = url:gsub("^%s+", ""):gsub("%s+$", "")
-    local lower = trimmed:lower()
-    if lower:find("/chat/completions", 1, true) then
-        return trimmed
-    end
-    if not should_normalize_base_url(trimmed) then
-        return trimmed
-    end
-    if lower:match("/chat/?$") then
-        return join_paths(trimmed, "/completions")
-    end
-    if lower:match("/v1/?$") then
-        return join_paths(trimmed, "/chat/completions")
-    end
-    return join_paths(trimmed, "/v1/chat/completions")
+    return url:gsub("^%s+", ""):gsub("%s+$", "")
 end
 
 config.base_url = normalize_base_url(config.base_url)
@@ -205,6 +168,18 @@ local function is_gemini_model()
     return string.find(model, "gemini", 1, true) ~= nil
 end
 
+local function is_grok_model()
+    local base = string.lower(config.base_url or "")
+    local model = string.lower(config.model_name or "")
+    if string.find(base, "api.x.ai", 1, true) ~= nil then
+        return true
+    end
+    if string.find(base, "/responses", 1, true) ~= nil then
+        return true
+    end
+    return string.find(model, "grok", 1, true) ~= nil
+end
+
 local function resolve_gemini_endpoint()
     local model = config.model_name or "gemini-2.5-flash"
     return "https://generativelanguage.googleapis.com/v1beta/models/" .. model .. ":generateContent"
@@ -236,6 +211,50 @@ local function extract_gemini_text(response)
 end
 
 -- 使用 curl 调用 AI API
+local function extract_grok_text(response)
+    local output_section = string.match(response or "", '"output_text"%s*:%s*%[(.-)%]')
+    local texts = {}
+    if output_section then
+        for text in string.gmatch(output_section, '"(.-)"') do
+            local cleaned = text
+            cleaned = string.gsub(cleaned, '\\n', '\n')
+            cleaned = string.gsub(cleaned, '\\r', '\r')
+            cleaned = string.gsub(cleaned, '\\t', '\t')
+            cleaned = string.gsub(cleaned, '\\"', '"')
+            cleaned = string.gsub(cleaned, '\\\\', '\\')
+            cleaned = string.gsub(cleaned, '^%s+', '')
+            cleaned = string.gsub(cleaned, '%s+$', '')
+            if cleaned ~= "" then
+                table.insert(texts, cleaned)
+            end
+        end
+    end
+
+    if #texts == 0 then
+        local content_section = string.match(response or "", '"output"%s*:%s*%[(.-)%]')
+        if content_section then
+            for text in string.gmatch(content_section, '"text"%s*:%s*"(.-)"') do
+                local cleaned = text
+                cleaned = string.gsub(cleaned, '\\n', '\n')
+                cleaned = string.gsub(cleaned, '\\r', '\r')
+                cleaned = string.gsub(cleaned, '\\t', '\t')
+                cleaned = string.gsub(cleaned, '\\"', '"')
+                cleaned = string.gsub(cleaned, '\\\\', '\\')
+                cleaned = string.gsub(cleaned, '^%s+', '')
+                cleaned = string.gsub(cleaned, '%s+$', '')
+                if cleaned ~= "" then
+                    table.insert(texts, cleaned)
+                end
+            end
+        end
+    end
+
+    if #texts == 0 then
+        return nil
+    end
+    return table.concat(texts, "\n")
+end
+
 local function call_ai_api(context, current_input)
     -- 检查 API Key
     if not config.api_key or config.api_key == "" then
@@ -274,6 +293,27 @@ local function call_ai_api(context, current_input)
         header_parts = {
             '-H "Content-Type: application/json"',
             string.format('-H "x-goog-api-key: %s"', config.api_key)
+        }
+    elseif is_grok_model() then
+        payload = {
+            model = config.model_name,
+            input = {
+                {
+                    role = "system",
+                    content = "你是一个智能输入法助手。根据用户的输入历史和当前输入，提供简洁的补全建议。每个建议一行，不要编号，不要额外解释。"
+                },
+                {
+                    role = "user",
+                    content = prompt
+                }
+            },
+            tools = {
+                { type = "web_search" }
+            }
+        }
+        header_parts = {
+            '-H "Content-Type: application/json"',
+            string.format('-H "Authorization: Bearer %s"', config.api_key)
         }
     else
         payload = {
@@ -335,6 +375,11 @@ local function call_ai_api(context, current_input)
     local content
     if is_gemini_model() then
         content = extract_gemini_text(response)
+        if not content then
+            return nil, "API 返回内容为空"
+        end
+    elseif is_grok_model() then
+        content = extract_grok_text(response)
         if not content then
             return nil, "API 返回内容为空"
         end
