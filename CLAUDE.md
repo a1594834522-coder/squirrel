@@ -449,3 +449,78 @@ app_options:
 - Rime GitHub: https://github.com/rime/home
 - Input Method Kit: https://developer.apple.com/documentation/inputmethodkit
 - librime API: https://github.com/rime/librime/blob/master/src/rime_api.h
+
+
+
+
+## AI 功能开发指南
+
+1）修改优先级  
+- 业务逻辑（API、提示词、tools 等）优先改：
+  - `data/rime.lua`
+  - 由前端生成的 `ai_pinyin.custom.yaml`  
+- `data/ai_pinyin.schema.yaml` 能不动就别动；必须修改时只做小 patch，避免整体复制雾凇配置重拼 engine。  
+
+2）Schema 与 Lua 一一对齐  
+- 修改 `data/ai_pinyin.schema.yaml` 后，务必执行：
+  - `cp data/ai_pinyin.schema.yaml data/plum/ai_pinyin.schema.yaml`
+  - `bash package/add_data_files`
+  - `make debug`（或 `make release`）  
+- 然后检查 `~/Library/Rime/build/ai_pinyin.schema.yaml` 的 `engine` 段是否包含：
+  - `lua_processor@ai_history_processor`（或带 `*`）
+  - `lua_processor@ai_completion_processor`
+  - `lua_translator@ai_completion_translator`
+  - `lua_filter@ai_history_filter`  
+- 再确认 `schema_list` 中有 `ai_pinyin`，并且当前确实切到了该方案。  
+
+3）data 与 data/plum 的职责  
+- 把 `data/` 视为「模板源」，`data/plum` 才是 Xcode 工程实际引用的真源。  
+- 推荐工作流：
+  - 在 `data/` 下修改 `rime.lua`、`ai_pinyin.schema.yaml` 等；
+  - 修改完执行：
+    - `cp data/rime.lua data/plum/rime.lua`
+    - `cp data/ai_pinyin.schema.yaml data/plum/ai_pinyin.schema.yaml`
+  - 再运行 `bash package/add_data_files` 更新工程引用。  
+- 避免只改 `data/plum` 忘记同步 `data`，防止出现双源不一致。  
+
+4）打包与安装的标准流程  
+- 出可交付安装包时，尽量遵循：
+  - `rm -rf build package/Squirrel.pkg`
+  - `bash package/add_data_files`
+  - `make release`
+  - `make package`
+  - `sudo make install-release`  
+- 安装后在干净账号做一次「从零体验」验证：
+  - 删除该账号的 `~/Library/Rime`；
+  - 安装刚生成的 `.pkg`；
+  - 登录后启用「AI 拼音」方案；
+  - 检查：
+    1. 打字有候选框（基础词库正常）；  
+    2. 默认输出简体（opencc + 简繁开关正常）；  
+    3. Tab 能触发 AI 补全；  
+    4. 连按两次 Command 能触发问答模式。  
+
+5）谨慎修改工程文件与安装脚本  
+- `Squirrel.xcodeproj/project.pbxproj`：  
+  - 只让 `package/add_data_files` 注入真实文件引用；  
+  - 定期确认没有伪条目：
+    - `rg "build:" Squirrel.xcodeproj/project.pbxproj`
+    - `rg "opencc:" Squirrel.xcodeproj/project.pbxproj`  
+- `scripts/postinstall` 与 `scripts/sync_rime_ice_dicts.sh`：  
+  - 只做「复制必要资源 + 调用 \`rime_deployer --build\`」这两件事情；  
+  - 更复杂的逻辑尽量放在用户级工具脚本中，避免直接堆到安装阶段。  
+
+6）调试策略：优先看部署结果  
+- 每次调整 AI 相关配置后，建议显式跑一遍：
+  ```bash
+  /Library/Input\ Methods/Squirrel.app/Contents/MacOS/rime_deployer \
+      --build ~/Library/Rime \
+      /Library/Input\ Methods/Squirrel.app/Contents/SharedSupport \
+      ~/Library/Rime/build
+  ```  
+- 然后检查：
+  - `~/Library/Rime/build/ai_pinyin.schema.yaml`  
+  - `~/Library/Rime/default.custom.yaml` 与 `~/Library/Rime/build/default.yaml`  
+  - 以及（若启用日志）`~/Library/Rime/ai_debug.log` 是否有期望的记录。  
+- 通过这些结果可以尽早发现 schema 是否被自动 patch，Lua 处理器是否挂上，而不是等到按键无反应才回头排查。  
+

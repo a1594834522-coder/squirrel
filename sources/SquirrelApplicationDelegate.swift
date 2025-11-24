@@ -111,7 +111,7 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
 
     // 创建配置窗口
     let window = NSWindow(
-      contentRect: NSRect(x: 0, y: 0, width: 520, height: 360),
+      contentRect: NSRect(x: 0, y: 0, width: 520, height: 420),
       styleMask: [.titled, .closable],
       backing: .buffered,
       defer: false
@@ -129,11 +129,14 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
     let geminiModel = "gemini-2.5-flash"
     let geminiURL = geminiEndpoint(for: geminiModel)
     let grokURL = "https://api.x.ai/v1/responses"
-    var currentBaseURL = defaultOpenAIURL
-    var currentAPIKey = ""
+    let defaults = UserDefaults.standard
+    var currentBaseURL = defaults.string(forKey: "AIBaseURL") ?? defaultOpenAIURL
+    var currentAPIKey = defaults.string(forKey: "AIApiKey") ?? ""
+    let toolsConfigPath = SquirrelApp.userDir.appending(component: "ai_pinyin.tools.json")
+    var currentToolsConfig = defaults.string(forKey: "AIToolsConfig") ?? ""
     let defaultOpenAIModel = "gpt-4o-mini"
     let grokModel = "grok-4-fast"
-    var currentModel = defaultOpenAIModel
+    var currentModel = defaults.string(forKey: "AIModelName") ?? defaultOpenAIModel
 
     if FileManager.default.fileExists(atPath: configPath.path) {
       if let content = try? String(contentsOf: configPath) {
@@ -158,6 +161,11 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
         }
       }
     }
+    if FileManager.default.fileExists(atPath: toolsConfigPath.path) {
+      if let toolsContent = try? String(contentsOf: toolsConfigPath) {
+        currentToolsConfig = toolsContent
+      }
+    }
     if isGeminiProvider(baseURL: currentBaseURL, model: currentModel) {
       currentBaseURL = geminiEndpoint(for: currentModel)
     } else if isGrokProvider(baseURL: currentBaseURL, model: currentModel) {
@@ -170,10 +178,10 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
     let isGrokPreset = !isGeminiPreset && isGrokProvider(baseURL: currentBaseURL, model: currentModel)
 
     // 创建标签和输入框
-    let yStart: CGFloat = 280
+    let yStart: CGFloat = 360
     let labelWidth: CGFloat = 120
     let fieldWidth: CGFloat = 340
-    let rowHeight: CGFloat = 55
+    let rowHeight: CGFloat = 70
 
     // Provider Preset
     let providerLabel = NSTextField(labelWithString: "配置预设:")
@@ -182,10 +190,10 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
     contentView.addSubview(providerLabel)
 
     let providerPopup = NSPopUpButton(frame: NSRect(x: 150, y: yStart - 5, width: fieldWidth, height: 24))
-    providerPopup.addItems(withTitles: ["自定义 (OpenAI 兼容)", "Gemini 2.5 Flash", "Grok 4 Fast"])
-    if isGeminiPreset {
+    providerPopup.addItems(withTitles: ["OpenAI 旧格式", "OpenAI /responses 格式", "Googleapis 格式"])
+    if isGrokPreset {
       providerPopup.selectItem(at: 1)
-    } else if isGrokPreset {
+    } else if isGeminiPreset {
       providerPopup.selectItem(at: 2)
     } else {
       providerPopup.selectItem(at: 0)
@@ -252,29 +260,53 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
     }
     contentView.addSubview(modelField)
 
+    // Tools 配置（仅 /responses 模板）
+    let toolsLabel = NSTextField(labelWithString: "Tools 配置:")
+    toolsLabel.frame = NSRect(x: 20, y: 125, width: labelWidth, height: 20)
+    toolsLabel.alignment = .right
+    contentView.addSubview(toolsLabel)
+
+    let toolsScrollView = NSScrollView(frame: NSRect(x: 150, y: 80, width: fieldWidth, height: 40))
+    toolsScrollView.hasVerticalScroller = true
+    toolsScrollView.borderType = .bezelBorder
+    let toolsTextView = NSTextView(frame: NSRect(x: 0, y: 0, width: fieldWidth, height: 40))
+    toolsTextView.isVerticallyResizable = true
+    toolsTextView.isHorizontallyResizable = false
+    toolsTextView.autoresizingMask = [.width]
+    toolsTextView.textContainer?.containerSize = NSSize(width: fieldWidth, height: .greatestFiniteMagnitude)
+    toolsTextView.textContainer?.widthTracksTextView = true
+    toolsTextView.string = currentToolsConfig
+    toolsTextView.font = NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize(for: .small), weight: .regular)
+    toolsScrollView.documentView = toolsTextView
+    contentView.addSubview(toolsScrollView)
+
+    let initialShowTools = isGrokPreset
+    toolsLabel.isHidden = !initialShowTools
+    toolsScrollView.isHidden = !initialShowTools
+
     // 状态标签
     let statusLabel = NSTextField(labelWithString: "")
-    statusLabel.frame = NSRect(x: 20, y: 70, width: 480, height: 20)
+    statusLabel.frame = NSRect(x: 20, y: 40, width: 480, height: 20)
     statusLabel.alignment = .center
     statusLabel.textColor = .secondaryLabelColor
     contentView.addSubview(statusLabel)
 
     // 测试按钮
     let testButton = NSButton(title: "测试连接", target: nil, action: nil)
-    testButton.frame = NSRect(x: 20, y: 20, width: 100, height: 32)
+    testButton.frame = NSRect(x: 20, y: 10, width: 100, height: 32)
     testButton.bezelStyle = .rounded
     contentView.addSubview(testButton)
 
     // 保存按钮
     let saveButton = NSButton(title: "保存", target: nil, action: nil)
-    saveButton.frame = NSRect(x: 300, y: 20, width: 80, height: 32)
+    saveButton.frame = NSRect(x: 300, y: 10, width: 80, height: 32)
     saveButton.bezelStyle = .rounded
     saveButton.keyEquivalent = "\r"
     contentView.addSubview(saveButton)
 
     // 取消按钮
     let cancelButton = NSButton(title: "取消", target: nil, action: nil)
-    cancelButton.frame = NSRect(x: 390, y: 20, width: 80, height: 32)
+    cancelButton.frame = NSRect(x: 390, y: 10, width: 80, height: 32)
     cancelButton.bezelStyle = .rounded
     cancelButton.keyEquivalent = "\u{1b}"
     contentView.addSubview(cancelButton)
@@ -293,6 +325,8 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
       "baseURL": baseURLField,
       "apiKey": apiKeyField,
       "model": modelField,
+       "toolsLabel": toolsLabel,
+       "toolsTextView": toolsTextView,
       "status": statusLabel,
       "saveButton": saveButton,
       "testButton": testButton
@@ -375,6 +409,10 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
       return
     }
 
+    let toolsLabel = fields["toolsLabel"] as? NSView
+    let toolsTextView = fields["toolsTextView"] as? NSTextView
+    let toolsScrollView = toolsTextView?.enclosingScrollView
+
     let defaultOpenAIURL = "https://api.openai.com/v1/chat/completions"
     let grokURL = "https://api.x.ai/v1/responses"
     let defaultOpenAIModel = "gpt-4o-mini"
@@ -388,7 +426,7 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
     let isGrokBase = lowerBaseValue.contains("api.x.ai") || lowerBaseValue.contains("/responses")
 
     switch sender.indexOfSelectedItem {
-    case 1:
+    case 2:
       let resolvedModel: String
       if trimmedModelValue.isEmpty || trimmedModelValue == defaultOpenAIModel || trimmedModelValue == grokModel {
         resolvedModel = geminiModel
@@ -401,13 +439,13 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
       if trimmedBaseValue.isEmpty ||
           trimmedBaseValue == defaultOpenAIURL ||
           trimmedBaseValue == grokURL ||
-          !baseMatchesResolvedModel {
+           !baseMatchesResolvedModel {
         baseURLField.stringValue = suggestedGeminiURL
       }
       baseURLField.placeholderString = suggestedGeminiURL
       apiKeyField.placeholderString = "AIza..."
       modelField.placeholderString = geminiModel
-    case 2:
+    case 1:
       if trimmedBaseValue.isEmpty || trimmedBaseValue == defaultOpenAIURL || isGeminiBase || isLegacyGrokBase {
         baseURLField.stringValue = grokURL
       }
@@ -428,6 +466,10 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
       apiKeyField.placeholderString = "sk-..."
       modelField.placeholderString = defaultOpenAIModel
     }
+
+    let shouldShowTools = sender.indexOfSelectedItem == 1
+    toolsLabel?.isHidden = !shouldShowTools
+    toolsScrollView?.isHidden = !shouldShowTools
   }
 
   @objc private func saveAIConfig(_ sender: NSButton) {
@@ -439,9 +481,15 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
       return
     }
 
+    let toolsTextView = fields["toolsTextView"] as? NSTextView
+    let providerPopup = fields["provider"] as? NSPopUpButton
+
     let baseURL = baseURLField.stringValue.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
     let apiKey = apiKeyField.stringValue.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
     let model = modelField.stringValue.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+    let rawToolsConfig = toolsTextView?.string ?? ""
+    let toolsConfig = rawToolsConfig.trimmingCharacters(in: .whitespacesAndNewlines)
+    let defaults = UserDefaults.standard
 
     // 验证输入
     if baseURL.isEmpty || apiKey.isEmpty || model.isEmpty {
@@ -461,6 +509,8 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
       normalizedBaseURL = normalizedChatCompletionsURL(from: baseURL)
     }
     baseURLField.stringValue = normalizedBaseURL
+
+    let isResponsesPreset = providerPopup?.indexOfSelectedItem == 1
 
     // 生成配置文件
     let configContent = """
@@ -489,9 +539,32 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
     """
 
     let configPath = SquirrelApp.userDir.appending(component: "ai_pinyin.custom.yaml")
+    let toolsPath = SquirrelApp.userDir.appending(component: "ai_pinyin.tools.json")
 
     do {
       try configContent.write(to: configPath, atomically: true, encoding: String.Encoding.utf8)
+
+      defaults.set(normalizedBaseURL, forKey: "AIBaseURL")
+      defaults.set(apiKey, forKey: "AIApiKey")
+      defaults.set(model, forKey: "AIModelName")
+
+      if isResponsesPreset {
+        if toolsConfig.isEmpty {
+          if FileManager.default.fileExists(atPath: toolsPath.path) {
+            try? FileManager.default.removeItem(at: toolsPath)
+          }
+          defaults.removeObject(forKey: "AIToolsConfig")
+        } else {
+          try toolsConfig.write(to: toolsPath, atomically: true, encoding: .utf8)
+          defaults.set(toolsConfig, forKey: "AIToolsConfig")
+        }
+      } else {
+        if FileManager.default.fileExists(atPath: toolsPath.path) {
+          try? FileManager.default.removeItem(at: toolsPath)
+        }
+        defaults.removeObject(forKey: "AIToolsConfig")
+      }
+
       statusLabel.stringValue = "配置已保存，请重新部署 Squirrel"
       statusLabel.textColor = NSColor.systemGreen
 

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Sync rime-ice dictionaries (cn_dicts/en_dicts) and core configs into SharedSupport
+# Sync rime-ice dictionaries (cn_dicts/en_dicts) into SharedSupport
 
 set -euo pipefail
 
@@ -39,41 +39,3 @@ copy_dict_dir() {
 
 copy_dict_dir "cn_dicts"
 copy_dict_dir "en_dicts"
-
-# Sync core rime-ice configs so the bundled scheme and shortcuts (Tab、简繁切换等) match upstream
-sync_config_file() {
-    local name="$1"
-    local src="${RIME_ICE_DIR}/${name}"
-    local dest="${DEST_DIR}/${name}"
-
-    if [ -f "${src}" ]; then
-        cp "${src}" "${dest}"
-    else
-        echo "Warning: missing rime-ice config ${src}" >&2
-    fi
-}
-
-sync_config_file "default.yaml"
-sync_config_file "squirrel.yaml"
-sync_config_file "symbols_v.yaml"
-sync_config_file "rime_ice.schema.yaml"
-sync_config_file "rime_ice.dict.yaml"
-
-# 复制项目自定义的 default.custom.yaml（启用 AI 拼音方案）
-if [ -f "${REPO_ROOT}/data/default.custom.yaml" ]; then
-    cp "${REPO_ROOT}/data/default.custom.yaml" "${DEST_DIR}/default.custom.yaml"
-fi
-
-# 雾凇自带的九宫格与双拼方案（避免 default.yaml 里列出的 schema 缺失）
-for schema in \
-  "t9.schema.yaml" \
-  "double_pinyin.schema.yaml" \
-  "double_pinyin_abc.schema.yaml" \
-  "double_pinyin_mspy.schema.yaml" \
-  "double_pinyin_sogou.schema.yaml" \
-  "double_pinyin_flypy.schema.yaml" \
-  "double_pinyin_ziguang.schema.yaml" \
-  "double_pinyin_jiajia.schema.yaml"
-do
-  sync_config_file "${schema}"
-done
