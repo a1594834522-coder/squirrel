@@ -421,6 +421,7 @@ end
 local function generate_question(pinyin, raw_candidates)
     debug_log("=== Generating Query Completions ===")
     debug_log("Pinyin: " .. pinyin)
+    debug_log("Raw candidate count: " .. tostring(raw_candidates and #raw_candidates or 0))
 
     -- 构造候选列表文本，帮助模型理解当前 IME 给出的结果
     local candidates_text = ""
@@ -428,6 +429,7 @@ local function generate_question(pinyin, raw_candidates)
         local parts = {}
         local max_show = math.min(#raw_candidates, 5)
         for i = 1, max_show do
+            debug_log(string.format("Raw candidate[%d]: %s", i, tostring(raw_candidates[i])))
             table.insert(parts, string.format("%d. %s", i, raw_candidates[i]))
         end
         candidates_text = table.concat(parts, "\n")
@@ -463,7 +465,8 @@ local function generate_question(pinyin, raw_candidates)
         candidates_text
     )
 
-    local request_body = build_request_body(system_prompt, user_prompt, 0.1, 300, false)
+    -- 生成问题阶段：只做意图澄清，限制长度在 200 tokens 内
+    local request_body = build_request_body(system_prompt, user_prompt, 0.1, 200, false)
 
     local headers = {
         ["Content-Type"] = "application/json",
@@ -512,32 +515,53 @@ local function answer_question(question)
     debug_log("=== Answering Question ===")
     debug_log("Question: " .. question)
 
-    local system_prompt = [[你是一个专业、友好的中文助手，用于在输入法中为用户提供「可以直接上屏使用」的内容型回答。
+    local system_prompt = [[你是一名集成在中文输入法中的回答助手。用户在同一段输入上连续按下两次 Command 键时，表示希望你基于当前这句话给出一个「可以直接上屏」的最终答案。
 
-任务说明：
-- 用户会输入一段中文文本或拼音串，可能是一个问题、祈使句（如“讲个笑话”）、请求（如“写一条祝福语”），也可能是一个主题短语（如“辛亥革命简介”）。
-- 你需要先正确理解这段文本的意图，然后直接给出用户真正想要的内容本身。
+【你的角色】
+- 以中文回答为主，语气自然克制，不自报身份，不寒暄。
+- 你的输出会直接插入用户正在编辑的文本或对话，不能像聊天机器人那样啰嗦。
 
-回答原则：
-1. 准确性：尽量提供真实、可靠的信息；不确定时可简要说明不确定性。
-2. 完整性：覆盖当前意图下最重要的 1–3 个信息点，或者给出一个完整的内容单元（如一个笑话、一句祝福、一条标题等）。
-3. 简洁性：用 1–2 句话说明白，或在合适时仅返回一个词语、短语、标题或网址本身，避免冗长解释。
-4. 实用性：优先给出对用户有帮助、可执行或可直接使用的内容，而不是空泛评论。
-5. 直接可用：当文本中包含“网址/链接/官网/标题/名称/题目”等含义时，你的回答应直接给出对应的内容本身（例如 `www.example.com` 或一个标题字符串），而不是形如“XXX 的网址是：……”“标题是：……”这样的句子。
-6. 语气克制：禁止输出诸如“好的，下面是……”“当然可以”“没问题”“希望对你有帮助”“作为一个 AI 助手”等多余的客套话或自我说明。
-7. 内部判断：你可以在思考过程中判断这是什么「意图类型」，但不要在输出中写出诸如“这是一个问题意图”“用户想知道……”之类的分析语句。
+【你会收到什么】
+- 一段已经尽量还原用户真实意图的中文句子或短语（可能来自拼音转写、也可能是用户原文），例如：
+  - 事实性问题（“杭州现在天气怎么样”“马斯克多少岁了”）
+  - 信息检索类请求（“比亚迪最新股价”“ChatGPT 4.0 发布时间”）
+  - 内容生成类请求（“写一条生日祝福给同事”“讲一个冷笑话”）
+  - 主题短语（“辛亥革命简介”“区块链优缺点”）等。
 
-输出格式：
-- 返回一个连续的中文或混合文本段落（通常 1–2 句话，或在合适时仅返回一个词语/短语/标题/网址本身）。
-- 不要使用任何序号、列表符号或多行结构。
-- 直接输出内容本身，不要解释你的思考过程，不要重复或改写用户的问题，不要添加“回答：”“回答1:”“标题是：”“网址是：”“好的，下面是：”等前缀或后缀。]]
+【工具和实时信息（重点）】
+- 你可以通过 web_search 等工具获取最新信息。(注意，今年是2025年)
+- 当问题明确涉及「现在/当前/今天/实时/最新」等时间敏感内容时，你应当优先使用这些工具，而不要凭记忆或常识猜测。
+  典型需要使用工具的场景包括但不限于：
+  - 实时天气、温度、空气质量（例如“杭州现在天气怎么样”“今天上海要下雨吗”）
+  - 汇率、股价、基金净值、币价（例如“现在美元对人民币汇率”“比亚迪最新股价”）
+  - 实时新闻、最新进展、赛事比分、排期/发售时间等（例如“苹果最新发布会有什么内容”“昨天湖人比赛比分”）。
+- 如果工具不可用、超时或信息高度不确定，你应简洁说明不确定性，例如：
+  - “无法确定当前的具体天气情况，可以打开天气类 App 查看实时信息。”
+  - “股价等金融数据随时波动，请以交易软件或官网为准。”
+- 在这类场景下，禁止编造一个看起来很具体、但没有根据的数字或描述（例如捏造温度、价格、准确时间等）。
+
+【回答内容】
+1. 准确性优先：尽量基于可靠来源回答，不确定就说明不确定，而不是装作确定。
+2. 重点突出：覆盖当前意图下最重要的 1–3 个信息点，避免与问题无关的扩展。
+3. 简洁实用：通常用 1–2 句说清楚，或在适当场景下只返回一个词语、短语、标题或网址本身。
+4. 直接可用：当用户在找“标题 / 名称 / 链接 / 网址”等时，请直接给出对应内容（例如 `www.example.com` 或一个标题字符串），不要加「标题是：」「网址是：」之类的前缀。
+5. 内容生成类请求（如笑话、祝福语、文案等），请直接给出一份质量较高、可以直接上屏使用的结果，不需要解释你的创作思路。
+
+【输出约束】
+- 输出一个连续的中文或中英混合文本片段：
+  - 通常为 1–2 句话；
+  - 某些场景下可以只输出一个词、短语、标题或网址。
+- 不要使用任何序号、列表符号或多行分点结构。
+- 不要在开头或结尾添加「好的，下面是」「希望对你有帮助」「作为一个 AI 助手」等客套或说明性语句。
+- 不要在输出中出现诸如「这是一个问题意图」「用户想知道……」之类的分析性说明，这些判断只保留在你的内部思考中。]]
 
     local user_prompt = string.format(
-        "用户输入：%s\n\n请先判断这是一段什么类型的意图（问题、祈使句、请求、主题短语等），然后直接给出用户真正想要的内容本身。可以是 1–2 句话，也可以在合适时仅返回一个词语、短语、标题或网址。严格按照以下要求输出：只输出答案本身，不要重复或改写用户输入，不要添加任何序号、项目符号、分点说明，也不要出现“好的，下面是：”“标题是：”“网址是：”之类的前缀或客套话。",
+        "用户输入：%s\n\n直接给出用户真正想要的内容本身。可以是 1–2 句话，也可以在合适时仅返回一个词语、短语、标题或网址。严格按照以下要求输出：只输出答案本身，不要重复或改写用户输入，不要添加任何序号、项目符号、分点说明，也不要出现“好的，下面是：”“标题是：”“网址是：”之类的前缀或客套话。",
         question
     )
 
-    local request_body = build_request_body(system_prompt, user_prompt, 0.3, 500, true)
+    -- 回答阶段：允许更长回答，最多约 1000 tokens，并可启用 web_search 等 tools
+    local request_body = build_request_body(system_prompt, user_prompt, 0.3, 1000, true)
 
     local headers = {
         ["Content-Type"] = "application/json",
@@ -658,8 +682,8 @@ local function call_ai_api(current_pinyin, history_context, raw_candidates)
         )
     end
 
-    -- 构建请求体
-    local request_body = build_request_body(ai_config.system_prompt, user_prompt, 0.2, ai_config.max_tokens or 200, false)
+    -- 构建请求体：Tab 联想 / 第一次 Command，统一限制在 200 tokens 内
+    local request_body = build_request_body(ai_config.system_prompt, user_prompt, 0.2, 200, false)
 
     debug_log("Request body: " .. request_body)
 
@@ -735,9 +759,14 @@ function ai_completion_processor(key, env)
             if qa_state.mode == "none" or not is_same_session then
                 -- 第一次按 Command：基于拼音 + 当前候选生成贴本意的查询/请求候选（不考虑历史上下文）
                 debug_log("Generating query completions from candidates (no history)...")
+                -- 这里不再依赖 ai_history_filter 的缓存，直接从当前高亮候选读取一个代表性候选
                 local raw_candidates = {}
-                if last_candidates_input == input and last_candidates and #last_candidates > 0 then
-                    raw_candidates = last_candidates
+                local selected = context:get_selected_candidate()
+                if selected and selected.text and selected.text ~= "" then
+                    raw_candidates = { selected.text }
+                    debug_log("Using selected candidate for Command-1: " .. selected.text)
+                else
+                    debug_log("No selected candidate available for Command-1")
                 end
                 local questions = generate_question(input, raw_candidates)
 
@@ -835,8 +864,13 @@ function ai_completion_processor(key, env)
 
             -- 获取当前候选列表（用于“验证与纠正 + 联想”），仅在编码一致时使用，避免读取上一句话的候选
             local raw_candidates = {}
-            if last_candidates_input == input and last_candidates and #last_candidates > 0 then
-                raw_candidates = last_candidates
+            -- 同样不再依赖 last_candidates，直接使用当前高亮候选
+            local selected = context:get_selected_candidate()
+            if selected and selected.text and selected.text ~= "" then
+                raw_candidates = { selected.text }
+                debug_log("Using selected candidate for Tab: " .. selected.text)
+            else
+                debug_log("No selected candidate available for Tab")
             end
 
             -- 调用 AI API（传入拼音、上下文以及当前候选列表）
