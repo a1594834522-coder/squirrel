@@ -100,7 +100,14 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
   private var aiConfigWindow: NSWindow?
   private var aiConfigFields: [String: Any]?
   private let memorylakeBaseURL = "http://117.50.226.120:3002/v1/responses"
-  private let responsesModelOptions = ["xai/grok-4-fast-non-reasoning", "xai/grok-4", "gpt-4o", "gpt-4o-mini"]
+  private let responsesModelOptions = [
+    "xai/grok-4-fast-non-reasoning",
+    "xai/grok-4",
+    "gpt-4o",
+    "gpt-4o-mini",
+    "qwen-max",
+    "qwen-flash"
+  ]
 
   func openAIConfig() {
     ensureEditMenuAvailable()

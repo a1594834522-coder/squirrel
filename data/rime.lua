@@ -472,8 +472,8 @@ local function generate_question(pinyin, raw_candidates)
         candidates_text
     )
 
-    -- 生成问题阶段：只做意图澄清，限制长度在 200 tokens 内
-    local request_body = build_request_body(system_prompt, user_prompt, 0.1, 200, false)
+    -- 生成问题阶段：只做意图澄清，限制长度在 500 tokens 内
+    local request_body = build_request_body(system_prompt, user_prompt, 0.1, 500, false)
 
     local headers = {
         ["Content-Type"] = "application/json",
@@ -689,8 +689,8 @@ local function call_ai_api(current_pinyin, history_context, raw_candidates)
         )
     end
 
-    -- 构建请求体：Tab 联想 / 第一次 Command，统一限制在 200 tokens 内
-    local request_body = build_request_body(ai_config.system_prompt, user_prompt, 0.2, 200, false)
+    -- 构建请求体：Tab 联想 / 第一次 Command，统一限制在 500 tokens 内
+    local request_body = build_request_body(ai_config.system_prompt, user_prompt, 0.2, 500, false)
 
     debug_log("Request body: " .. request_body)
 
