@@ -18,3 +18,8 @@ package/*.xml
 *~
 .*.swp
 .DS_Store
+
+# Local tooling and scratch artifacts
+.claude/
+build-old/
+*.jpg
