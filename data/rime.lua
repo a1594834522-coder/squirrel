@@ -472,8 +472,8 @@ local function generate_question(pinyin, raw_candidates)
         candidates_text
     )
 
-    -- 生成问题阶段：只做意图澄清，限制长度在 500 tokens 内
-    local request_body = build_request_body(system_prompt, user_prompt, 0.1, 500, false)
+    -- 生成问题阶段：只做意图澄清，限制长度在 1500 tokens 内
+    local request_body = build_request_body(system_prompt, user_prompt, 0.1, 1500, false)
 
     local headers = {
         ["Content-Type"] = "application/json",
